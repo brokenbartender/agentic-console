@@ -25,6 +25,7 @@ Web UI: `http://127.0.0.1:8333`
 - `rag <query>`: answer with evidence + confidence
 - `deep_research <question>`: plan + reflect + answer
 - `ocr <pdf>`: quick OCR preview (requires tesseract)
+- `autonomy <level>`: set autonomy (supervised|semi|autonomous)
 
 ## Environment
 Create a `.env` in the project root:
@@ -45,6 +46,7 @@ Optional:
 AGENTIC_EMBEDDING_DIM=256
 AGENTIC_SHORT_MEMORY_TTL=86400
 AGENTIC_LONG_MEMORY_TTL=2592000
+AGENTIC_AUTONOMY_LEVEL=semi
 AGENTIC_WEB_PORT=8333
 ```
 

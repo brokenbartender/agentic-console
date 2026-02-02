@@ -49,6 +49,7 @@ class Settings:
     max_chat_turns: int = int(_env("CHAT_HISTORY_TURNS", "20"))
     auto_summarize: str = _env("AGENTIC_AUTO_SUMMARIZE", "true")
     task_queue_size: int = int(_env("AGENTIC_TASK_QUEUE_SIZE", "100"))
+    autonomy_level: str = _env("AGENTIC_AUTONOMY_LEVEL", "semi")
     server_host: str = _env("AGENTIC_WEB_HOST", "127.0.0.1")
     server_port: int = int(_env("AGENTIC_WEB_PORT", "8333"))
 

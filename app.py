@@ -23,6 +23,7 @@ from calibration import confidence_from_evidence
 from deep_research import DeepResearch
 from multimodal import ocr_pdf
 from router import choose_model
+from policy import requires_confirmation
 
 # Lazy imports for optional dependencies
 try:
@@ -126,6 +127,7 @@ class AgentApp:
         self.executor = ExecutorAgent(self._execute_step)
         self.verifier = VerifierAgent()
         self.deep_research = DeepResearch(self._agent_chat, self._rag_search)
+        self.autonomy_level = self.memory.get("autonomy_level") or settings.autonomy_level
 
         self._build_ui()
         self._load_memory()
@@ -375,10 +377,28 @@ class AgentApp:
                 self.log_line(output)
                 return
 
+            if lowered.startswith("autonomy "):
+                level = lowered.split(" ", 1)[1].strip()
+                if level not in ("supervised", "semi", "autonomous"):
+                    self.log_line("Autonomy must be one of: supervised, semi, autonomous")
+                    return
+                self.autonomy_level = level
+                self.memory.set("autonomy_level", level)
+                self.log_line(f"Autonomy set to {level}")
+                return
+
+            level = getattr(self, "autonomy_level", None) or getattr(self.settings, "autonomy_level", "semi")
             for name in self.tools.tools.keys():
                 prefix = f"{name} "
                 if lowered.startswith(prefix):
                     args = cmd[len(prefix):].strip()
+                    tool_risk = self.tools.specs.get(name).risk if name in self.tools.specs else "safe"
+                    if requires_confirmation(tool_risk, level) and not lowered.startswith("confirm"):
+                        payload = json.dumps({"type": "tool", "name": name, "args": args})
+                        self.memory.set("pending_action", payload)
+                        out = "This action requires confirmation. Type 'confirm' to proceed."
+                        self.log_line(out)
+                        return
                     try:
                         out = self._execute_tool(name, args)
                     except ToolNeedsConfirmation:

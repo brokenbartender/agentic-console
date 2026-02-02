@@ -139,6 +139,7 @@ class AppCommandTests(unittest.TestCase):
             long_memory_ttl=3600,
             task_queue_size=10,
         )
+        self.app.autonomy_level = "semi"
         self.app.memory = FakeMemory()
         self.app.metrics = app_mod.Metrics()
         self.app.tools = app_mod.ToolRegistry(self.app)
