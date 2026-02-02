@@ -26,6 +26,8 @@ Web UI: `http://127.0.0.1:8333`
 - `deep_research <question>`: plan + reflect + answer
 - `ocr <pdf>`: quick OCR preview (requires tesseract)
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
+- `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
+- `jobs`: list recent jobs
 
 ## Environment
 Create a `.env` in the project root:
@@ -53,6 +55,8 @@ AGENTIC_WEB_PORT=8333
 ## Endpoints
 - `GET /health` => `ok`
 - `GET /api/metrics` => JSON metrics
+- `GET /api/trace` => recent events
+- `GET /api/jobs` => recent jobs
 - `POST /api/command` => send a command
 
 ## Tests

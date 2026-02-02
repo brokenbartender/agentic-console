@@ -29,6 +29,14 @@ class FakeMemory:
         return []
 
 
+class FakeJobs:
+    def create(self, _cmd):
+        return 1
+
+    def update(self, _job_id, _status, _result=""):
+        return None
+
+
 class FakeLocator:
     def __init__(self, page, selector):
         self.page = page
@@ -144,6 +152,7 @@ class AppCommandTests(unittest.TestCase):
         self.app.metrics = app_mod.Metrics()
         self.app.tools = app_mod.ToolRegistry(self.app)
         self.app.retriever = app_mod.RetrieverAgent(self.app.memory)
+        self.app.jobs = FakeJobs()
         tool_prefixes = list(self.app.tools.tools.keys())
         tool_prefixes.append("agent")
         self.app.planner = app_mod.PlannerAgent([f"{p} " for p in tool_prefixes])
