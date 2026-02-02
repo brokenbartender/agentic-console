@@ -76,6 +76,158 @@ def _configure_agent():
         "Set OPENAI_API_KEY or set OLLAMA_MODEL (and optional OLLAMA_BASE)."
     )
 
+
+class ToolRegistry:
+    def __init__(self, app):
+        self.app = app
+        self.tools = {
+            "browse": self._browse,
+            "search": self._search,
+            "click": self._click,
+            "type": self._type,
+            "press": self._press,
+            "screenshot": self._screenshot,
+            "open": self._open,
+            "move": self._move,
+            "copy": self._copy,
+            "delete": self._delete,
+            "mkdir": self._mkdir,
+            "undo": self._undo,
+        }
+
+    def execute(self, name, raw_args, retries=2):
+        if name not in self.tools:
+            raise RuntimeError(f"Unknown tool: {name}")
+        last_err = None
+        for _ in range(retries + 1):
+            try:
+                return self.tools[name](raw_args)
+            except Exception as exc:
+                last_err = exc
+        raise last_err
+
+    def _browse(self, raw):
+        url = raw.strip()
+        if not url:
+            raise RuntimeError("browse requires a url")
+        if not url.startswith("http"):
+            url = "https://" + url
+        self.app.ensure_browser()
+        self.app.page.goto(url, wait_until="domcontentloaded")
+        return f"Opened {url}"
+
+    def _search(self, raw):
+        q = raw.strip()
+        if not q:
+            raise RuntimeError("search requires a query")
+        self.app.ensure_browser()
+        self.app.page.goto("https://www.google.com", wait_until="domcontentloaded")
+        self.app.page.locator("input[name='q']").fill(q)
+        self.app.page.keyboard.press("Enter")
+        return f"Searched: {q}"
+
+    def _click(self, raw):
+        selector = raw.strip()
+        if not selector:
+            raise RuntimeError("click requires a selector")
+        self.app.ensure_browser()
+        self.app.page.locator(selector).first.click()
+        return f"Clicked {selector}"
+
+    def _type(self, raw):
+        parts = raw.split("|", 1)
+        if len(parts) != 2:
+            raise RuntimeError("type requires: type <css selector> | <text>")
+        selector = parts[0].strip()
+        text = parts[1].strip()
+        self.app.ensure_browser()
+        self.app.page.locator(selector).fill(text)
+        return f"Typed into {selector}"
+
+    def _press(self, raw):
+        key = raw.strip()
+        if not key:
+            raise RuntimeError("press requires a key")
+        self.app.ensure_browser()
+        self.app.page.keyboard.press(key)
+        return f"Pressed {key}"
+
+    def _screenshot(self, raw):
+        path = raw.strip()
+        if not path:
+            raise RuntimeError("screenshot requires a path")
+        self.app.ensure_browser()
+        self.app.page.screenshot(path=path, full_page=True)
+        return f"Saved screenshot {path}"
+
+    def _open(self, raw):
+        path = raw.strip()
+        if not path:
+            raise RuntimeError("open requires a path")
+        os.startfile(path)
+        return f"Opened {path}"
+
+    def _move(self, raw):
+        parts = raw.split("|", 1)
+        if len(parts) != 2:
+            raise RuntimeError("move requires: move <src> | <dst>")
+        src = parts[0].strip()
+        dst = parts[1].strip()
+        shutil.move(src, dst)
+        if not os.path.exists(dst):
+            raise RuntimeError("move verification failed")
+        return f"Moved {src} -> {dst}"
+
+    def _copy(self, raw):
+        parts = raw.split("|", 1)
+        if len(parts) != 2:
+            raise RuntimeError("copy requires: copy <src> | <dst>")
+        src = parts[0].strip()
+        dst = parts[1].strip()
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+        if not os.path.exists(dst):
+            raise RuntimeError("copy verification failed")
+        return f"Copied {src} -> {dst}"
+
+    def _delete(self, raw):
+        path = raw.strip()
+        if not path:
+            raise RuntimeError("delete requires a path")
+        trash_dir = os.path.join(self.app.settings.data_dir, "trash")
+        os.makedirs(trash_dir, exist_ok=True)
+        base = os.path.basename(path.rstrip("\\/"))
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = os.path.join(trash_dir, f"{stamp}-{base}")
+        shutil.move(path, target)
+        self.app.memory.set("last_trash", json.dumps({"from": path, "to": target}))
+        return f"Moved to trash: {path}"
+
+    def _mkdir(self, raw):
+        path = raw.strip()
+        if not path:
+            raise RuntimeError("mkdir requires a path")
+        os.makedirs(path, exist_ok=True)
+        return f"Created {path}"
+
+    def _undo(self, raw):
+        data = self.app.memory.get("last_trash")
+        if not data:
+            return "Nothing to undo."
+        try:
+            payload = json.loads(data)
+            src = payload.get("to")
+            dst = payload.get("from")
+            if src and dst:
+                shutil.move(src, dst)
+                self.app.memory.set("last_trash", "")
+                return f"Restored {dst}"
+        except Exception:
+            return "Undo failed."
+        return "Nothing to undo."
+
 APP_TITLE = "Agentic Console"
 
 class AgentApp:
@@ -92,6 +244,7 @@ class AgentApp:
         self.page = None
         self.log_buffer = []
         self.chat_history = []
+        self.tools = ToolRegistry(self)
 
         self._build_ui()
         self._load_memory()
@@ -185,11 +338,10 @@ class AgentApp:
         lowered = instruction.strip().lower()
         tool_prefixes = (
             "browse ", "search ", "click ", "type ", "press ",
-            "screenshot ", "open ", "move ", "copy ", "delete ", "mkdir ", "agent "
+            "screenshot ", "open ", "move ", "copy ", "delete ", "mkdir ", "undo ", "agent "
         )
         if lowered.startswith(tool_prefixes):
             return [instruction]
-        # If user says "open" or "go to" without explicit command, let agent handle.
         return []
 
     def _executor(self, plan_steps):
@@ -261,99 +413,63 @@ class AgentApp:
     def _execute(self, cmd):
         try:
             if cmd.lower().startswith("browse "):
-                url = cmd[7:].strip()
-                if not url.startswith("http"):
-                    url = "https://" + url
-                self.ensure_browser()
-                self.page.goto(url, wait_until="domcontentloaded")
-                self.log_line(f"Opened {url}")
+                out = self.tools.execute("browse", cmd[7:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("search "):
-                q = cmd[7:].strip()
-                self.ensure_browser()
-                self.page.goto("https://www.google.com", wait_until="domcontentloaded")
-                self.page.locator("input[name='q']").fill(q)
-                self.page.keyboard.press("Enter")
-                self.log_line(f"Searched: {q}")
+                out = self.tools.execute("search", cmd[7:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("click "):
-                selector = cmd[6:].strip()
-                self.ensure_browser()
-                self.page.locator(selector).first.click()
-                self.log_line(f"Clicked {selector}")
+                out = self.tools.execute("click", cmd[6:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("type "):
-                parts = cmd[5:].split("|", 1)
-                if len(parts) != 2:
-                    raise RuntimeError("type requires: type <css selector> | <text>")
-                selector = parts[0].strip()
-                text = parts[1].strip()
-                self.ensure_browser()
-                self.page.locator(selector).fill(text)
-                self.log_line(f"Typed into {selector}")
+                out = self.tools.execute("type", cmd[5:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("press "):
-                key = cmd[6:].strip()
-                self.ensure_browser()
-                self.page.keyboard.press(key)
-                self.log_line(f"Pressed {key}")
+                out = self.tools.execute("press", cmd[6:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("screenshot "):
-                path = cmd[11:].strip()
-                if not path:
-                    raise RuntimeError("screenshot requires a path")
-                self.ensure_browser()
-                self.page.screenshot(path=path, full_page=True)
-                self.log_line(f"Saved screenshot {path}")
+                out = self.tools.execute("screenshot", cmd[11:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("open "):
-                path = cmd[5:].strip()
-                os.startfile(path)
-                self.log_line(f"Opened {path}")
+                out = self.tools.execute("open", cmd[5:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("move "):
-                parts = cmd[5:].split("|", 1)
-                if len(parts) != 2:
-                    raise RuntimeError("move requires: move <src> | <dst>")
-                src = parts[0].strip()
-                dst = parts[1].strip()
-                shutil.move(src, dst)
-                self.log_line(f"Moved {src} -> {dst}")
+                out = self.tools.execute("move", cmd[5:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("copy "):
-                parts = cmd[5:].split("|", 1)
-                if len(parts) != 2:
-                    raise RuntimeError("copy requires: copy <src> | <dst>")
-                src = parts[0].strip()
-                dst = parts[1].strip()
-                if os.path.isdir(src):
-                    shutil.copytree(src, dst, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(src, dst)
-                self.log_line(f"Copied {src} -> {dst}")
+                out = self.tools.execute("copy", cmd[5:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("delete "):
-                path = cmd[7:].strip()
-                if os.path.isdir(path):
-                    shutil.rmtree(path)
-                else:
-                    os.remove(path)
-                self.log_line(f"Deleted {path}")
+                out = self.tools.execute("delete", cmd[7:].strip())
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("mkdir "):
-                path = cmd[6:].strip()
-                os.makedirs(path, exist_ok=True)
-                self.log_line(f"Created {path}")
+                out = self.tools.execute("mkdir", cmd[6:].strip())
+                self.log_line(out)
+                return
+
+            if cmd.lower().startswith("undo"):
+                out = self.tools.execute("undo", "")
+                self.log_line(out)
                 return
 
             if cmd.lower().startswith("agent "):

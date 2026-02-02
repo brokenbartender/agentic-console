@@ -1,5 +1,6 @@
-﻿import os
+import os
 import tempfile
+import shutil
 import unittest
 from types import SimpleNamespace
 
@@ -101,16 +102,22 @@ class AgentAppShim(app_mod.AgentApp):
 class AppCommandTests(unittest.TestCase):
     def setUp(self):
         self.app = AgentAppShim()
+        self._tmp_data = tempfile.mkdtemp()
         self.app.playwright = None
         self.app.browser = None
         self.app.page = None
         self.app.chat_history = []
-        self.app.settings = SimpleNamespace(server_host="127.0.0.1", server_port=8333)
+        self.app.settings = SimpleNamespace(
+            server_host="127.0.0.1",
+            server_port=8333,
+            data_dir=self._tmp_data,
+        )
         self.app.memory = SimpleNamespace(
             get=lambda _k: None,
             set=lambda _k, _v: None,
             log_event=lambda _t, _p: None,
         )
+        self.app.tools = app_mod.ToolRegistry(self.app)
         self.logs = []
         self.app.log_line = lambda msg: self.logs.append(msg)
 
@@ -133,6 +140,7 @@ class AppCommandTests(unittest.TestCase):
         app_mod.AgentApp._agent_chat = self._orig_agent_chat
         if self._orig_startfile is not None:
             os.startfile = self._orig_startfile
+        shutil.rmtree(self._tmp_data, ignore_errors=True)
 
     def test_browse_search_click_type_press(self):
         self.app._execute("browse example.com")
@@ -157,7 +165,7 @@ class AppCommandTests(unittest.TestCase):
 
     def test_open(self):
         self.app._execute("open C:\\")
-        self.assertTrue(any("opened:C:\\" in line for line in self.logs))
+        self.assertTrue(any("Opened C:\\" in line for line in self.logs))
 
     def test_file_ops(self):
         with tempfile.TemporaryDirectory() as tmp:
