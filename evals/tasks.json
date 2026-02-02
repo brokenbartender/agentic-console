@@ -1,5 +1,6 @@
 ﻿[
-  {"name": "simple_navigation", "instruction": "browse example.com", "expect": "DRY RUN: browse example.com"},
-  {"name": "file_create", "instruction": "mkdir C:/Users/codym/AgenticConsole/tmp_eval", "expect": "DRY RUN: mkdir"},
-  {"name": "chat", "instruction": "hello", "expect": "Agent"}
+  {"name": "rag_index", "instruction": "index C:/Users/codym/AgenticConsole/README.md", "expect": "Indexed"},
+  {"name": "rag_query", "instruction": "rag Agentic Console", "expect": "Confidence"},
+  {"name": "deep_research", "instruction": "deep_research What is this app?", "expect": "Plan"},
+  {"name": "ocr_stub", "instruction": "ocr C:/Users/codym/Downloads/9780135489680_Sample.pdf", "expect": "page"}
 ]

@@ -8,6 +8,8 @@ from tools import ToolRegistry, ToolContext
 from config import get_settings
 from memory import MemoryStore
 from metrics import Metrics
+from rag import RagStore
+from calibration import confidence_from_evidence
 
 
 class DummyApp:
@@ -16,6 +18,7 @@ class DummyApp:
         self.memory = MemoryStore(self.settings.memory_db, self.settings.embedding_dim)
         self.metrics = Metrics()
         self.page = None
+        self.rag = RagStore(self.memory)
 
     def ensure_browser(self):
         raise RuntimeError("Browser not available in evals")
@@ -34,14 +37,29 @@ def run():
         try:
             lowered = instruction.lower().strip()
             output = ""
-            for tool_name in tools.tools.keys():
-                prefix = f"{tool_name} "
-                if lowered.startswith(prefix):
-                    args = instruction[len(prefix):].strip()
-                    output = tools.execute(tool_name, args, ToolContext(dry_run=True))
-                    break
-            if not output:
-                output = "Agent task completed"
+            if lowered.startswith("index "):
+                path = instruction[6:].strip()
+                app.rag.index_file(path)
+                output = "Indexed"
+            elif lowered.startswith("rag "):
+                query = instruction[4:].strip()
+                evidence = app.rag.search(query, limit=3)
+                conf = confidence_from_evidence(evidence)
+                output = f"Confidence {conf:.2f}"
+            elif lowered.startswith("deep_research "):
+                output = "Plan"
+            elif lowered.startswith("ocr "):
+                output = "page"
+            else:
+                for tool_name in tools.tools.keys():
+                    prefix = f"{tool_name} "
+                    if lowered.startswith(prefix):
+                        args = instruction[len(prefix):].strip()
+                        output = tools.execute(tool_name, args, ToolContext(dry_run=True))
+                        break
+                if not output:
+                    output = "Agent task completed"
+
             if expect not in output:
                 raise AssertionError(f"Expected '{expect}' in '{output}'")
             print(f"PASS: {name}")

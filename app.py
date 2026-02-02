@@ -18,6 +18,10 @@ from metrics import Metrics
 from task_queue import TaskQueue
 from tools import ToolRegistry, ToolContext, ToolNeedsConfirmation
 from agents import PlannerAgent, RetrieverAgent, ExecutorAgent, VerifierAgent
+from rag import RagStore
+from calibration import confidence_from_evidence
+from deep_research import DeepResearch
+from multimodal import ocr_pdf
 
 # Lazy imports for optional dependencies
 try:
@@ -96,13 +100,19 @@ class AgentApp:
         self.log_buffer = []
         self.chat_history = []
         self.tools = ToolRegistry(self)
+        self.rag = RagStore(self.memory)
 
         tool_prefixes = list(self.tools.tools.keys())
+        tool_prefixes.append("index")
+        tool_prefixes.append("rag")
+        tool_prefixes.append("deep_research")
+        tool_prefixes.append("ocr")
         tool_prefixes.append("agent")
         self.planner = PlannerAgent([f"{p} " for p in tool_prefixes])
         self.retriever = RetrieverAgent(self.memory)
         self.executor = ExecutorAgent(self._execute_step)
         self.verifier = VerifierAgent()
+        self.deep_research = DeepResearch(self._agent_chat, self._rag_search)
 
         self._build_ui()
         self._load_memory()
@@ -218,8 +228,54 @@ class AgentApp:
         ctx = ToolContext(confirm=confirm, dry_run=dry_run)
         return self.tools.execute(name, args, ctx)
 
+    def _rag_search(self, query: str, limit: int = 5):
+        return self.rag.search(query, limit=limit)
+
     def _execute_step(self, step: str):
         lowered = step.strip().lower()
+        if lowered.startswith("index "):
+            path = step[6:].strip()
+            if os.path.isdir(path):
+                count = 0
+                for root, _dirs, files in os.walk(path):
+                    for name in files:
+                        full = os.path.join(root, name)
+                        try:
+                            self.rag.index_file(full)
+                            count += 1
+                        except Exception:
+                            continue
+                self.log_line(f"Indexed {count} files")
+                return
+            self.rag.index_file(path)
+            self.log_line(f"Indexed {path}")
+            return
+
+        if lowered.startswith("rag "):
+            query = step[4:].strip()
+            evidence = self._rag_search(query, limit=5)
+            conf = confidence_from_evidence(evidence)
+            if not evidence:
+                self.log_line("No evidence found.")
+                return
+            ev_text = "\n".join(f"- {e['source']}: {e['text'][:200]}" for e in evidence)
+            answer = self._agent_chat(f"Use evidence to answer: {query}\nEvidence:\n{ev_text}")
+            self.log_line(f"Confidence: {conf:.2f}")
+            self.log_line(answer or "Agent task completed")
+            return
+
+        if lowered.startswith("deep_research "):
+            question = step[len("deep_research "):].strip()
+            output = self.deep_research.run(question)
+            self.log_line(output)
+            return
+
+        if lowered.startswith("ocr "):
+            path = step[len("ocr "):].strip()
+            text = ocr_pdf(path, pages=2)
+            self.log_line(text[:2000] if text else "No OCR text.")
+            return
+
         for name in self.tools.tools.keys():
             prefix = f"{name} "
             if lowered.startswith(prefix):
@@ -316,6 +372,10 @@ class AgentApp:
                         out = "This action may be destructive. Type 'confirm' to proceed."
                     self.log_line(out)
                     return
+
+            if lowered.startswith("index ") or lowered.startswith("rag ") or lowered.startswith("deep_research ") or lowered.startswith("ocr "):
+                self._execute_step(cmd)
+                return
 
             output = self._orchestrate(cmd)
             self.log_line(output)
