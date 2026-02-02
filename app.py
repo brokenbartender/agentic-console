@@ -12,6 +12,11 @@ import io
 import contextlib
 import urllib.request
 import urllib.error
+import logging
+
+from config import get_settings
+from memory import MemoryStore
+from logger import setup_logging
 
 # Lazy imports for optional dependencies
 try:
@@ -71,30 +76,16 @@ def _configure_agent():
         "Set OPENAI_API_KEY or set OLLAMA_MODEL (and optional OLLAMA_BASE)."
     )
 
-def _load_dotenv(path: str) -> None:
-    if not os.path.exists(path):
-        return
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip("\"").strip("'")
-                if key:
-                    os.environ[key] = value
-    except Exception:
-        return
-
 APP_TITLE = "Agentic Console"
 
 class AgentApp:
-    def __init__(self, root):
+    def __init__(self, root, settings, memory):
         self.root = root
         self.root.title(APP_TITLE)
         self.root.geometry("900x600")
+
+        self.settings = settings
+        self.memory = memory
 
         self.playwright = None
         self.browser = None
@@ -103,6 +94,7 @@ class AgentApp:
         self.chat_history = []
 
         self._build_ui()
+        self._load_memory()
 
     def _build_ui(self):
         top = ttk.Frame(self.root, padding=8)
@@ -146,6 +138,21 @@ class AgentApp:
         max_turns = int(os.getenv("CHAT_HISTORY_TURNS", "20"))
         if len(self.chat_history) > max_turns * 2:
             self.chat_history = self.chat_history[-max_turns * 2:]
+        self._save_memory()
+
+    def _load_memory(self):
+        try:
+            raw = self.memory.get("chat_history")
+            if raw:
+                self.chat_history = json.loads(raw)
+        except Exception:
+            self.chat_history = []
+
+    def _save_memory(self):
+        try:
+            self.memory.set("chat_history", json.dumps(self.chat_history))
+        except Exception:
+            pass
 
     def _agent_chat(self, instruction):
         _configure_agent()
@@ -155,12 +162,17 @@ class AgentApp:
             "When the user asks for actions, perform them directly. "
             "When the user asks for information or conversation, respond normally."
         )
+        self.memory.log_event("instruction", instruction)
+        logging.info("instruction: %s", instruction)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             result = oi_interpreter.chat(instruction)
         output = (buf.getvalue() or "").strip()
         if result and isinstance(result, str):
             output = (output + "\n" + result).strip() if output else result.strip()
+        if output:
+            self.memory.log_event("response", output)
+            logging.info("response: %s", output[:500])
         return output
 
     def ensure_browser(self):
@@ -398,8 +410,8 @@ def _make_web_handler(app):
 
 
 def _start_web_server(app):
-    host = os.getenv("AGENTIC_WEB_HOST", "127.0.0.1")
-    port = int(os.getenv("AGENTIC_WEB_PORT", "8333"))
+    host = app.settings.server_host
+    port = app.settings.server_port
     handler = _make_web_handler(app)
     server = ThreadingHTTPServer((host, port), handler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -409,9 +421,11 @@ def _start_web_server(app):
 
 
 def main():
-    _load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    settings = get_settings()
+    setup_logging(settings.log_file)
     root = tk.Tk()
-    app = AgentApp(root)
+    memory = MemoryStore(settings.memory_db)
+    app = AgentApp(root, settings, memory)
     _start_web_server(app)
     app.log_line("OpenAI key loaded: " + ("yes" if os.getenv("OPENAI_API_KEY") else "no"))
 

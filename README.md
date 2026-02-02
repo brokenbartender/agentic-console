@@ -17,6 +17,12 @@ python app.py
 The app also starts a local web UI at `http://127.0.0.1:8333`.
 You can change it with `AGENTIC_WEB_HOST` and `AGENTIC_WEB_PORT`.
 
+## Data + Logs
+
+Persistent chat history and logs are stored under `data/` by default.
+Override with:
+`AGENTIC_DATA_DIR`, `AGENTIC_MEMORY_DB`, `AGENTIC_LOG_FILE`.
+
 ## Use
 
 Just type what you want in natural language. No special commands required.

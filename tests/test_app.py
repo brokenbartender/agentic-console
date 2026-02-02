@@ -105,6 +105,12 @@ class AppCommandTests(unittest.TestCase):
         self.app.browser = None
         self.app.page = None
         self.app.chat_history = []
+        self.app.settings = SimpleNamespace(server_host="127.0.0.1", server_port=8333)
+        self.app.memory = SimpleNamespace(
+            get=lambda _k: None,
+            set=lambda _k, _v: None,
+            log_event=lambda _t, _p: None,
+        )
         self.logs = []
         self.app.log_line = lambda msg: self.logs.append(msg)
 
