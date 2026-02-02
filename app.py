@@ -1,22 +1,23 @@
 ﻿import os
-import shlex
-import shutil
 import threading
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
 import json
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import contextlib
-import urllib.request
-import urllib.error
 import logging
 
 from config import get_settings
 from memory import MemoryStore
 from logger import setup_logging
+from metrics import Metrics
+from task_queue import TaskQueue
+from tools import ToolRegistry, ToolContext, ToolNeedsConfirmation
+from agents import PlannerAgent, RetrieverAgent, ExecutorAgent, VerifierAgent
 
 # Lazy imports for optional dependencies
 try:
@@ -35,7 +36,7 @@ except Exception:
     oi_interpreter = None
 
 
-def _configure_agent():
+def _configure_agent(settings):
     if oi_interpreter is None:
         raise RuntimeError(
             "open-interpreter not installed. Run: python -m pip install open-interpreter"
@@ -57,14 +58,12 @@ def _configure_agent():
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         oi_interpreter.offline = False
-        model = os.getenv("OPENAI_MODEL")
-        if model:
-            oi_interpreter.llm.model = model
+        oi_interpreter.llm.model = settings.openai_model
         return
 
     # Local fallback (optional)
-    ollama_model = os.getenv("OLLAMA_MODEL")
-    ollama_base = os.getenv("OLLAMA_BASE", "http://127.0.0.1:11434")
+    ollama_model = os.getenv("OLLAMA_MODEL") or settings.ollama_model
+    ollama_base = os.getenv("OLLAMA_BASE", settings.ollama_base)
     if ollama_model:
         oi_interpreter.offline = True
         oi_interpreter.llm.model = ollama_model
@@ -77,158 +76,8 @@ def _configure_agent():
     )
 
 
-class ToolRegistry:
-    def __init__(self, app):
-        self.app = app
-        self.tools = {
-            "browse": self._browse,
-            "search": self._search,
-            "click": self._click,
-            "type": self._type,
-            "press": self._press,
-            "screenshot": self._screenshot,
-            "open": self._open,
-            "move": self._move,
-            "copy": self._copy,
-            "delete": self._delete,
-            "mkdir": self._mkdir,
-            "undo": self._undo,
-        }
-
-    def execute(self, name, raw_args, retries=2):
-        if name not in self.tools:
-            raise RuntimeError(f"Unknown tool: {name}")
-        last_err = None
-        for _ in range(retries + 1):
-            try:
-                return self.tools[name](raw_args)
-            except Exception as exc:
-                last_err = exc
-        raise last_err
-
-    def _browse(self, raw):
-        url = raw.strip()
-        if not url:
-            raise RuntimeError("browse requires a url")
-        if not url.startswith("http"):
-            url = "https://" + url
-        self.app.ensure_browser()
-        self.app.page.goto(url, wait_until="domcontentloaded")
-        return f"Opened {url}"
-
-    def _search(self, raw):
-        q = raw.strip()
-        if not q:
-            raise RuntimeError("search requires a query")
-        self.app.ensure_browser()
-        self.app.page.goto("https://www.google.com", wait_until="domcontentloaded")
-        self.app.page.locator("input[name='q']").fill(q)
-        self.app.page.keyboard.press("Enter")
-        return f"Searched: {q}"
-
-    def _click(self, raw):
-        selector = raw.strip()
-        if not selector:
-            raise RuntimeError("click requires a selector")
-        self.app.ensure_browser()
-        self.app.page.locator(selector).first.click()
-        return f"Clicked {selector}"
-
-    def _type(self, raw):
-        parts = raw.split("|", 1)
-        if len(parts) != 2:
-            raise RuntimeError("type requires: type <css selector> | <text>")
-        selector = parts[0].strip()
-        text = parts[1].strip()
-        self.app.ensure_browser()
-        self.app.page.locator(selector).fill(text)
-        return f"Typed into {selector}"
-
-    def _press(self, raw):
-        key = raw.strip()
-        if not key:
-            raise RuntimeError("press requires a key")
-        self.app.ensure_browser()
-        self.app.page.keyboard.press(key)
-        return f"Pressed {key}"
-
-    def _screenshot(self, raw):
-        path = raw.strip()
-        if not path:
-            raise RuntimeError("screenshot requires a path")
-        self.app.ensure_browser()
-        self.app.page.screenshot(path=path, full_page=True)
-        return f"Saved screenshot {path}"
-
-    def _open(self, raw):
-        path = raw.strip()
-        if not path:
-            raise RuntimeError("open requires a path")
-        os.startfile(path)
-        return f"Opened {path}"
-
-    def _move(self, raw):
-        parts = raw.split("|", 1)
-        if len(parts) != 2:
-            raise RuntimeError("move requires: move <src> | <dst>")
-        src = parts[0].strip()
-        dst = parts[1].strip()
-        shutil.move(src, dst)
-        if not os.path.exists(dst):
-            raise RuntimeError("move verification failed")
-        return f"Moved {src} -> {dst}"
-
-    def _copy(self, raw):
-        parts = raw.split("|", 1)
-        if len(parts) != 2:
-            raise RuntimeError("copy requires: copy <src> | <dst>")
-        src = parts[0].strip()
-        dst = parts[1].strip()
-        if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dst)
-        if not os.path.exists(dst):
-            raise RuntimeError("copy verification failed")
-        return f"Copied {src} -> {dst}"
-
-    def _delete(self, raw):
-        path = raw.strip()
-        if not path:
-            raise RuntimeError("delete requires a path")
-        trash_dir = os.path.join(self.app.settings.data_dir, "trash")
-        os.makedirs(trash_dir, exist_ok=True)
-        base = os.path.basename(path.rstrip("\\/"))
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        target = os.path.join(trash_dir, f"{stamp}-{base}")
-        shutil.move(path, target)
-        self.app.memory.set("last_trash", json.dumps({"from": path, "to": target}))
-        return f"Moved to trash: {path}"
-
-    def _mkdir(self, raw):
-        path = raw.strip()
-        if not path:
-            raise RuntimeError("mkdir requires a path")
-        os.makedirs(path, exist_ok=True)
-        return f"Created {path}"
-
-    def _undo(self, raw):
-        data = self.app.memory.get("last_trash")
-        if not data:
-            return "Nothing to undo."
-        try:
-            payload = json.loads(data)
-            src = payload.get("to")
-            dst = payload.get("from")
-            if src and dst:
-                shutil.move(src, dst)
-                self.app.memory.set("last_trash", "")
-                return f"Restored {dst}"
-        except Exception:
-            return "Undo failed."
-        return "Nothing to undo."
-
 APP_TITLE = "Agentic Console"
+
 
 class AgentApp:
     def __init__(self, root, settings, memory):
@@ -238,6 +87,8 @@ class AgentApp:
 
         self.settings = settings
         self.memory = memory
+        self.metrics = Metrics()
+        self.task_queue = TaskQueue(settings.task_queue_size)
 
         self.playwright = None
         self.browser = None
@@ -245,6 +96,13 @@ class AgentApp:
         self.log_buffer = []
         self.chat_history = []
         self.tools = ToolRegistry(self)
+
+        tool_prefixes = list(self.tools.tools.keys())
+        tool_prefixes.append("agent")
+        self.planner = PlannerAgent([f"{p} " for p in tool_prefixes])
+        self.retriever = RetrieverAgent(self.memory)
+        self.executor = ExecutorAgent(self._execute_step)
+        self.verifier = VerifierAgent()
 
         self._build_ui()
         self._load_memory()
@@ -257,7 +115,7 @@ class AgentApp:
         input_row = ttk.Frame(top)
         input_row.pack(fill=tk.X)
 
-        ttk.Label(input_row, text="Task/Command:").pack(side=tk.LEFT)
+        ttk.Label(input_row, text="Task:").pack(side=tk.LEFT)
         entry = ttk.Entry(input_row, textvariable=self.input_var)
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         entry.bind("<Return>", lambda _e: self.run_command())
@@ -288,10 +146,20 @@ class AgentApp:
 
     def _add_message(self, role, text):
         self.chat_history.append({"role": role, "content": text})
-        max_turns = int(os.getenv("CHAT_HISTORY_TURNS", "20"))
+        max_turns = self.settings.max_chat_turns
         if len(self.chat_history) > max_turns * 2:
-            self.chat_history = self.chat_history[-max_turns * 2:]
+            self._summarize_history()
         self._save_memory()
+
+    def _summarize_history(self):
+        if not self.chat_history:
+            return
+        summary = " ".join(m["content"] for m in self.chat_history[-10:])
+        summary = summary[:800]
+        self.memory.set("chat_summary", summary)
+        if self.settings.auto_summarize.lower() == "true":
+            self.memory.add_memory("summary", summary, ttl_seconds=self.settings.long_memory_ttl)
+        self.chat_history = self.chat_history[-10:]
 
     def _load_memory(self):
         try:
@@ -308,73 +176,84 @@ class AgentApp:
             pass
 
     def _agent_chat(self, instruction):
-        _configure_agent()
+        _configure_agent(self.settings)
         oi_interpreter.auto_run = True
         oi_interpreter.system_message = (
             "You are ChatGPT with full access to the user's computer and browser. "
             "When the user asks for actions, perform them directly. "
-            "When the user asks for information or conversation, respond normally."
+            "When the user asks for information or conversation, respond normally. "
+            "Always be concise and confirm destructive actions."
         )
+        context = self.retriever.retrieve(instruction)
+        if context:
+            instruction = f"Context:\n{context}\n\nUser: {instruction}"
+        self._add_message("user", instruction)
+        self.memory.add_memory("short", f"USER: {instruction}", ttl_seconds=self.settings.short_memory_ttl)
         self.memory.log_event("instruction", instruction)
         logging.info("instruction: %s", instruction)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            result = oi_interpreter.chat(instruction)
+            try:
+                result = oi_interpreter.chat(instruction)
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "insufficient_quota" in msg or "quota" in msg:
+                    oi_interpreter.offline = True
+                    oi_interpreter.llm.model = self.settings.ollama_model
+                    oi_interpreter.llm.api_base = self.settings.ollama_base
+                    result = oi_interpreter.chat(instruction)
+                else:
+                    raise
         output = (buf.getvalue() or "").strip()
         if result and isinstance(result, str):
             output = (output + "\n" + result).strip() if output else result.strip()
         if output:
             self.memory.log_event("response", output)
             logging.info("response: %s", output[:500])
+            self._add_message("assistant", output)
+            self.memory.add_memory("short", f"ASSISTANT: {output}", ttl_seconds=self.settings.short_memory_ttl)
         return output
 
-    def _needs_confirmation(self, instruction):
-        danger = [" delete ", " remove ", " rm ", " rmdir ", " del ", " erase "]
-        lowered = f" {instruction.lower()} "
-        return any(d in lowered for d in danger)
+    def _execute_tool(self, name: str, args: str, confirm: bool = False, dry_run: bool = False):
+        ctx = ToolContext(confirm=confirm, dry_run=dry_run)
+        return self.tools.execute(name, args, ctx)
 
-    def _planner(self, instruction):
-        # Lightweight planner: simple heuristic routing to tool actions vs. agent chat.
-        lowered = instruction.strip().lower()
-        tool_prefixes = (
-            "browse ", "search ", "click ", "type ", "press ",
-            "screenshot ", "open ", "move ", "copy ", "delete ", "mkdir ", "undo ", "agent "
-        )
-        if lowered.startswith(tool_prefixes):
-            return [instruction]
-        return []
-
-    def _executor(self, plan_steps):
-        for step in plan_steps:
-            self._execute(step)
-
-    def _verifier(self, plan_steps):
-        # Minimal verifier: log completion of each step.
-        if plan_steps:
-            self.memory.log_event("verify", json.dumps({"steps": plan_steps}))
+    def _execute_step(self, step: str):
+        lowered = step.strip().lower()
+        for name in self.tools.tools.keys():
+            prefix = f"{name} "
+            if lowered.startswith(prefix):
+                args = step[len(prefix):].strip()
+                out = self._execute_tool(name, args)
+                self.log_line(out)
+                return
+        # If not a tool, route to agent.
+        out = self._agent_chat(step) or "Agent task completed"
+        self.log_line(out)
 
     def _orchestrate(self, instruction):
-        # Guardrail for destructive actions.
-        if self._needs_confirmation(instruction):
-            pending = self.memory.get("pending_confirm")
-            if pending != instruction:
-                self.memory.set("pending_confirm", instruction)
-                return "This action may be destructive. Type 'confirm' to proceed."
         if instruction.strip().lower() == "confirm":
-            pending = self.memory.get("pending_confirm")
+            pending = self.memory.get("pending_action")
             if not pending:
                 return "No pending action to confirm."
-            self.memory.set("pending_confirm", "")
-            instruction = pending
+            payload = json.loads(pending)
+            self.memory.set("pending_action", "")
+            if payload.get("type") == "tool":
+                name = payload.get("name")
+                args = payload.get("args")
+                out = self._execute_tool(name, args, confirm=True)
+                return out
+            return "Nothing to confirm."
 
-        plan = self._planner(instruction)
+        plan = self.planner.plan(instruction)
         if plan:
             self.memory.log_event("plan", json.dumps({"steps": plan}))
-            self._executor(plan)
-            self._verifier(plan)
+            self.executor.run(plan)
+            verify_msg = self.verifier.verify(plan)
+            if verify_msg:
+                self.memory.log_event("verify", verify_msg)
             return "Done."
 
-        # Default: use agent for freeform tasks.
         return self._agent_chat(instruction) or "Agent task completed"
 
     def ensure_browser(self):
@@ -407,72 +286,17 @@ class AgentApp:
             return
         self.input_var.set("")
         self.log_line(f"> {cmd}")
-        t = threading.Thread(target=self._execute, args=(cmd,), daemon=True)
-        t.start()
+        self.task_queue.enqueue(lambda: self._execute(cmd))
 
-    def _execute(self, cmd):
+    def _execute(self, cmd: str):
         try:
-            if cmd.lower().startswith("browse "):
-                out = self.tools.execute("browse", cmd[7:].strip())
-                self.log_line(out)
-                return
+            self.metrics.inc("tasks_total")
+            start = time.time()
+            lowered = cmd.lower().strip()
+            if "remember" in lowered or "note this" in lowered:
+                self.memory.add_memory("long", cmd, ttl_seconds=self.settings.long_memory_ttl)
 
-            if cmd.lower().startswith("search "):
-                out = self.tools.execute("search", cmd[7:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("click "):
-                out = self.tools.execute("click", cmd[6:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("type "):
-                out = self.tools.execute("type", cmd[5:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("press "):
-                out = self.tools.execute("press", cmd[6:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("screenshot "):
-                out = self.tools.execute("screenshot", cmd[11:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("open "):
-                out = self.tools.execute("open", cmd[5:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("move "):
-                out = self.tools.execute("move", cmd[5:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("copy "):
-                out = self.tools.execute("copy", cmd[5:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("delete "):
-                out = self.tools.execute("delete", cmd[7:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("mkdir "):
-                out = self.tools.execute("mkdir", cmd[6:].strip())
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("undo"):
-                out = self.tools.execute("undo", "")
-                self.log_line(out)
-                return
-
-            if cmd.lower().startswith("agent "):
+            if lowered.startswith("agent "):
                 instruction = cmd[6:].strip()
                 if not instruction:
                     raise RuntimeError("agent requires an instruction")
@@ -480,10 +304,27 @@ class AgentApp:
                 self.log_line(output)
                 return
 
+            for name in self.tools.tools.keys():
+                prefix = f"{name} "
+                if lowered.startswith(prefix):
+                    args = cmd[len(prefix):].strip()
+                    try:
+                        out = self._execute_tool(name, args)
+                    except ToolNeedsConfirmation:
+                        payload = json.dumps({"type": "tool", "name": name, "args": args})
+                        self.memory.set("pending_action", payload)
+                        out = "This action may be destructive. Type 'confirm' to proceed."
+                    self.log_line(out)
+                    return
+
             output = self._orchestrate(cmd)
             self.log_line(output)
         except Exception as e:
+            self.metrics.inc("tasks_failed")
             self.log_line(f"Error: {e}")
+        finally:
+            self.metrics.set_timer("last_task_seconds", time.time() - start)
+            self.metrics.inc("tasks_completed")
 
 
 def _make_web_handler(app):
@@ -501,6 +342,10 @@ def _make_web_handler(app):
                 return
             if self.path == "/health":
                 self._send(HTTPStatus.OK, b"ok", "text/plain")
+                return
+            if self.path == "/api/metrics":
+                body = json.dumps(app.metrics.snapshot()).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
                 return
             if self.path != "/":
                 self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
@@ -525,6 +370,7 @@ def _make_web_handler(app):
     <textarea id="cmd"></textarea><br/>
     <button onclick="sendCmd()">Run</button>
     <pre id="out"></pre>
+    <pre id="metrics"></pre>
     <script>
       async function sendCmd() {
         const cmd = document.getElementById('cmd').value;
@@ -535,7 +381,14 @@ def _make_web_handler(app):
         });
         const data = await res.json();
         document.getElementById('out').textContent = data.output || '';
+        await refreshMetrics();
       }
+      async function refreshMetrics() {
+        const res = await fetch('/api/metrics');
+        const data = await res.json();
+        document.getElementById('metrics').textContent = JSON.stringify(data, null, 2);
+      }
+      refreshMetrics();
     </script>
   </body>
 </html>
@@ -554,7 +407,7 @@ def _make_web_handler(app):
                 if not command:
                     self._send(HTTPStatus.BAD_REQUEST, b"missing command", "text/plain")
                     return
-                app._execute(command)
+                app.task_queue.enqueue_and_wait(lambda: app._execute(command))
                 out = app.get_recent_logs(40)
                 body = json.dumps({"output": out}).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
@@ -583,7 +436,7 @@ def main():
     settings = get_settings()
     setup_logging(settings.log_file)
     root = tk.Tk()
-    memory = MemoryStore(settings.memory_db)
+    memory = MemoryStore(settings.memory_db, settings.embedding_dim)
     app = AgentApp(root, settings, memory)
     _start_web_server(app)
     app.log_line("OpenAI key loaded: " + ("yes" if os.getenv("OPENAI_API_KEY") else "no"))

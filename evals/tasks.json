@@ -1,0 +1,5 @@
+﻿[
+  {"name": "simple_navigation", "instruction": "browse example.com", "expect": "DRY RUN: browse example.com"},
+  {"name": "file_create", "instruction": "mkdir C:/Users/codym/AgenticConsole/tmp_eval", "expect": "DRY RUN: mkdir"},
+  {"name": "chat", "instruction": "hello", "expect": "Agent"}
+]

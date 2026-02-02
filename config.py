@@ -39,6 +39,12 @@ class Settings:
     ollama_base: str = _env("OLLAMA_BASE", "http://127.0.0.1:11434")
     ollama_model: str = _env("OLLAMA_MODEL", "phi3:latest")
     openai_model: str = _env("OPENAI_MODEL", "gpt-5.1")
+    embedding_dim: int = int(_env("AGENTIC_EMBEDDING_DIM", "256"))
+    short_memory_ttl: int = int(_env("AGENTIC_SHORT_MEMORY_TTL", "86400"))
+    long_memory_ttl: int = int(_env("AGENTIC_LONG_MEMORY_TTL", "2592000"))
+    max_chat_turns: int = int(_env("CHAT_HISTORY_TURNS", "20"))
+    auto_summarize: str = _env("AGENTIC_AUTO_SUMMARIZE", "true")
+    task_queue_size: int = int(_env("AGENTIC_TASK_QUEUE_SIZE", "100"))
     server_host: str = _env("AGENTIC_WEB_HOST", "127.0.0.1")
     server_port: int = int(_env("AGENTIC_WEB_PORT", "8333"))
 
