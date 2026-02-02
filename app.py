@@ -23,9 +23,11 @@ from calibration import confidence_from_evidence
 from deep_research import DeepResearch
 from multimodal import ocr_pdf
 from router import choose_model
-from policy import requires_confirmation
-from job_store import JobStore
-from team import TeamOrchestrator, AgentRole
+from policy import requires_confirmation
+from job_store import JobStore
+from team import TeamOrchestrator, AgentRole
+from a2a import A2ABus
+from mcp_adapter import MCPAdapter
 
 # Lazy imports for optional dependencies
 try:
@@ -116,15 +118,19 @@ class AgentApp:
         self.log_buffer = []
         self.chat_history = []
         self.tools = ToolRegistry(self)
-        self.rag = RagStore(self.memory)
-        self.jobs = JobStore(self.memory._conn)
+        self.rag = RagStore(self.memory)
+        self.jobs = JobStore(self.memory._conn)
+        self.a2a = A2ABus(self.memory)
+        self.mcp = MCPAdapter()
 
         tool_prefixes = list(self.tools.tools.keys())
-        tool_prefixes.append("index")
-        tool_prefixes.append("rag")
-        tool_prefixes.append("deep_research")
-        tool_prefixes.append("ocr")
-        tool_prefixes.append("agent")
+        tool_prefixes.append("index")
+        tool_prefixes.append("rag")
+        tool_prefixes.append("deep_research")
+        tool_prefixes.append("ocr")
+        tool_prefixes.append("a2a")
+        tool_prefixes.append("mcp")
+        tool_prefixes.append("agent")
         self.planner = PlannerAgent([f"{p} " for p in tool_prefixes])
         self.retriever = RetrieverAgent(self.memory)
         self.executor = ExecutorAgent(self._execute_step)
@@ -291,16 +297,43 @@ class AgentApp:
             self.log_line(output)
             return
 
-        if lowered.startswith("team "):
-            task = step[len("team "):].strip()
+        if lowered.startswith("team "):
+            task = step[len("team "):].strip()
             roles = [
                 AgentRole("Planner", "Create a brief plan."),
                 AgentRole("Builder", "Execute the plan or draft the solution."),
                 AgentRole("Reviewer", "Review for issues and improvements."),
             ]
             output = self.team.run(roles, task)
-            self.log_line(output)
-            return
+            self.log_line(output)
+            return
+
+        if lowered.startswith("a2a "):
+            # format: a2a sender -> receiver | message
+            raw = step[len("a2a "):].strip()
+            if "->" not in raw or "|" not in raw:
+                self.log_line("a2a requires: a2a sender -> receiver | message")
+                return
+            left, msg = raw.split("|", 1)
+            sender, receiver = [s.strip() for s in left.split("->", 1)]
+            self.a2a.send(sender, receiver, msg.strip())
+            self.log_line("A2A message sent.")
+            return
+
+        if lowered.startswith("mcp "):
+            # format: mcp provider | json
+            raw = step[len("mcp "):].strip()
+            if "|" not in raw:
+                self.log_line("mcp requires: mcp provider | {json}")
+                return
+            provider, payload = [s.strip() for s in raw.split("|", 1)]
+            try:
+                data = json.loads(payload)
+                result = self.mcp.call(provider, data)
+                self.log_line(json.dumps(result))
+            except Exception as exc:
+                self.log_line(f"mcp error: {exc}")
+            return
 
         if lowered.startswith("ocr "):
             path = step[len("ocr "):].strip()
@@ -471,6 +504,10 @@ def _make_web_handler(app):
                 return
             if self.path == "/api/jobs":
                 body = json.dumps(app.jobs.list(20)).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/a2a":
+                body = json.dumps(app.a2a.recent(20)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
             if self.path != "/":

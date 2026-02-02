@@ -28,6 +28,8 @@ Web UI: `http://127.0.0.1:8333`
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
 - `jobs`: list recent jobs
+- `a2a <sender -> receiver | message>`: send agent-to-agent message
+- `mcp <provider | json>`: call an MCP provider (stub)
 
 ## Environment
 Create a `.env` in the project root:
@@ -57,6 +59,7 @@ AGENTIC_WEB_PORT=8333
 - `GET /api/metrics` => JSON metrics
 - `GET /api/trace` => recent events
 - `GET /api/jobs` => recent jobs
+- `GET /api/a2a` => recent A2A messages
 - `POST /api/command` => send a command
 
 ## Tests
