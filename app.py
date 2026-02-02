@@ -175,6 +175,56 @@ class AgentApp:
             logging.info("response: %s", output[:500])
         return output
 
+    def _needs_confirmation(self, instruction):
+        danger = [" delete ", " remove ", " rm ", " rmdir ", " del ", " erase "]
+        lowered = f" {instruction.lower()} "
+        return any(d in lowered for d in danger)
+
+    def _planner(self, instruction):
+        # Lightweight planner: simple heuristic routing to tool actions vs. agent chat.
+        lowered = instruction.strip().lower()
+        tool_prefixes = (
+            "browse ", "search ", "click ", "type ", "press ",
+            "screenshot ", "open ", "move ", "copy ", "delete ", "mkdir ", "agent "
+        )
+        if lowered.startswith(tool_prefixes):
+            return [instruction]
+        # If user says "open" or "go to" without explicit command, let agent handle.
+        return []
+
+    def _executor(self, plan_steps):
+        for step in plan_steps:
+            self._execute(step)
+
+    def _verifier(self, plan_steps):
+        # Minimal verifier: log completion of each step.
+        if plan_steps:
+            self.memory.log_event("verify", json.dumps({"steps": plan_steps}))
+
+    def _orchestrate(self, instruction):
+        # Guardrail for destructive actions.
+        if self._needs_confirmation(instruction):
+            pending = self.memory.get("pending_confirm")
+            if pending != instruction:
+                self.memory.set("pending_confirm", instruction)
+                return "This action may be destructive. Type 'confirm' to proceed."
+        if instruction.strip().lower() == "confirm":
+            pending = self.memory.get("pending_confirm")
+            if not pending:
+                return "No pending action to confirm."
+            self.memory.set("pending_confirm", "")
+            instruction = pending
+
+        plan = self._planner(instruction)
+        if plan:
+            self.memory.log_event("plan", json.dumps({"steps": plan}))
+            self._executor(plan)
+            self._verifier(plan)
+            return "Done."
+
+        # Default: use agent for freeform tasks.
+        return self._agent_chat(instruction) or "Agent task completed"
+
     def ensure_browser(self):
         if self.page is not None:
             return
@@ -310,19 +360,12 @@ class AgentApp:
                 instruction = cmd[6:].strip()
                 if not instruction:
                     raise RuntimeError("agent requires an instruction")
-                output = self._agent_chat(instruction)
-                if output:
-                    self.log_line(output)
-                else:
-                    self.log_line("Agent task completed")
+                output = self._orchestrate(instruction)
+                self.log_line(output)
                 return
 
-            # Default: route all natural language to the agent.
-            output = self._agent_chat(cmd)
-            if output:
-                self.log_line(output)
-            else:
-                self.log_line("Agent task completed")
+            output = self._orchestrate(cmd)
+            self.log_line(output)
         except Exception as e:
             self.log_line(f"Error: {e}")
 
