@@ -71,6 +71,9 @@ def run():
     if failed:
         raise SystemExit(1)
 
+    # Tool selection eval
+    os.system("python evals/tool_eval.py")
+
 
 if __name__ == "__main__":
     run()

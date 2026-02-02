@@ -1,0 +1,9 @@
+﻿{
+  "tasks": [
+    {"id": "reasoning_1", "question": "If all contracts are agreements and this document is a contract, what is it?", "expected": "agreement"},
+    {"id": "reasoning_2", "question": "A is before B. B is before C. What is the order?", "expected": "A"}
+  ],
+  "computer_use": [
+    {"id": "cu_1", "task": "Open example.com", "expected_tool": "browse"}
+  ]
+}

@@ -226,6 +226,8 @@ class AgentApp:
 
     def _execute_tool(self, name: str, args: str, confirm: bool = False, dry_run: bool = False):
         ctx = ToolContext(confirm=confirm, dry_run=dry_run)
+        self.metrics.add_tool_call(name)
+        self.memory.log_event("tool", json.dumps({"name": name, "args": args}))
         return self.tools.execute(name, args, ctx)
 
     def _rag_search(self, query: str, limit: int = 5):
@@ -405,6 +407,10 @@ def _make_web_handler(app):
                 return
             if self.path == "/api/metrics":
                 body = json.dumps(app.metrics.snapshot()).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/trace":
+                body = json.dumps(app.memory.recent_events(50)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
             if self.path != "/":

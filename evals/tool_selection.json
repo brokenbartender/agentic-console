@@ -1,0 +1,7 @@
+﻿[
+  {"prompt": "Open the project folder", "expected_tool": "open"},
+  {"prompt": "Take a screenshot", "expected_tool": "screenshot"},
+  {"prompt": "Search for openai", "expected_tool": "search"},
+  {"prompt": "Create a folder", "expected_tool": "mkdir"},
+  {"prompt": "Copy a file", "expected_tool": "copy"}
+]

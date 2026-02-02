@@ -18,6 +18,9 @@ class Metrics:
         with self._lock:
             self._timers[name] = seconds
 
+    def add_tool_call(self, tool_name: str) -> None:
+        self.inc(f"tool.{tool_name}.calls", 1)
+
     def snapshot(self) -> dict:
         with self._lock:
             return {

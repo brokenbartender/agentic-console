@@ -104,6 +104,18 @@ class MemoryStore:
         )
         self._conn.commit()
 
+    def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT timestamp, event_type, payload FROM events ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {"timestamp": ts, "event_type": et, "payload": payload}
+            for (ts, et, payload) in rows
+        ]
+
     def add_memory(self, kind: str, content: str, tags: Optional[List[str]] = None, ttl_seconds: Optional[int] = None) -> None:
         expires_at = time.time() + ttl_seconds if ttl_seconds else None
         embedding = _embed_text(content, self.embedding_dim)
