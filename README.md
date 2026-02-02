@@ -31,7 +31,11 @@ Create a `.env` in the project root:
 ```
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-5.1
+OPENAI_REASONING_MODEL=gpt-5.1
+OPENAI_CODING_MODEL=gpt-5.1
 OLLAMA_MODEL=phi3:latest
+OLLAMA_REASONING_MODEL=phi3:latest
+OLLAMA_CODING_MODEL=phi3:latest
 OLLAMA_BASE=http://127.0.0.1:11434
 TESSERACT_CMD=C:\\Program Files\\Tesseract-OCR\\tesseract.exe
 ```

@@ -22,6 +22,7 @@ from rag import RagStore
 from calibration import confidence_from_evidence
 from deep_research import DeepResearch
 from multimodal import ocr_pdf
+from router import choose_model
 
 # Lazy imports for optional dependencies
 try:
@@ -40,7 +41,7 @@ except Exception:
     oi_interpreter = None
 
 
-def _configure_agent(settings):
+def _configure_agent(settings, instruction: str = ""):
     if oi_interpreter is None:
         raise RuntimeError(
             "open-interpreter not installed. Run: python -m pip install open-interpreter"
@@ -62,11 +63,23 @@ def _configure_agent(settings):
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         oi_interpreter.offline = False
-        oi_interpreter.llm.model = settings.openai_model
+        mode = choose_model(instruction)
+        if mode == "coding":
+            oi_interpreter.llm.model = settings.openai_coding_model
+        elif mode == "reasoning":
+            oi_interpreter.llm.model = settings.openai_reasoning_model
+        else:
+            oi_interpreter.llm.model = settings.openai_model
         return
 
     # Local fallback (optional)
-    ollama_model = os.getenv("OLLAMA_MODEL") or settings.ollama_model
+    mode = choose_model(instruction)
+    if mode == "coding":
+        ollama_model = os.getenv("OLLAMA_CODING_MODEL") or settings.ollama_coding_model
+    elif mode == "reasoning":
+        ollama_model = os.getenv("OLLAMA_REASONING_MODEL") or settings.ollama_reasoning_model
+    else:
+        ollama_model = os.getenv("OLLAMA_MODEL") or settings.ollama_model
     ollama_base = os.getenv("OLLAMA_BASE", settings.ollama_base)
     if ollama_model:
         oi_interpreter.offline = True
@@ -186,7 +199,7 @@ class AgentApp:
             pass
 
     def _agent_chat(self, instruction):
-        _configure_agent(self.settings)
+        _configure_agent(self.settings, instruction)
         oi_interpreter.auto_run = True
         oi_interpreter.system_message = (
             "You are ChatGPT with full access to the user's computer and browser. "

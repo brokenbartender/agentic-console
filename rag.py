@@ -39,7 +39,15 @@ class RagStore:
     def index_file(self, path: str) -> int:
         with open(path, "r", encoding="utf-8", errors="ignore") as handle:
             text = handle.read()
-        return self.index_text(os.path.basename(path), text)
+        # chunking for provenance and retrieval quality
+        chunk_size = 1000
+        count = 0
+        for i in range(0, len(text), chunk_size):
+            chunk = text[i : i + chunk_size]
+            if chunk.strip():
+                self.index_text(os.path.basename(path), chunk)
+                count += 1
+        return count
 
     def search(self, query: str, limit: int = 5) -> List[dict]:
         qvec = _embed_text(query, self.memory.embedding_dim)
