@@ -1,4 +1,5 @@
 import os
+import shutil
 
 import threading
 
@@ -21,6 +22,8 @@ import io
 import contextlib
 
 import logging
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
 
 
 
@@ -136,6 +139,31 @@ except Exception:
 
     oi_interpreter = None
 
+
+@dataclass
+class PlanStep:
+    step: int
+    action: str
+    target: str
+    value: str = ""
+    reason: str = ""
+    command: str = ""
+
+
+@dataclass
+class TaskRun:
+    run_id: str
+    intent: Dict[str, str]
+    plan_steps: List[PlanStep]
+    approved: bool = False
+    mode: str = "demo"
+    status: str = "planned"
+    created_at: str = ""
+    command: str = ""
+    run_dir: str = ""
+    actions_path: str = ""
+    screenshots_dir: str = ""
+    extracted_path: str = ""
 
 
 
@@ -403,6 +431,12 @@ class AgentApp:
         self.team = TeamOrchestrator(self._agent_chat)
         self.edge_mode = self.memory.get("edge_mode") or "auto"
         self.agent_profile = self.memory.get("agent_profile") or ""
+        self.demo_mode = settings.demo_mode.lower() == "true"
+        self.advanced_mode = False
+        self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
+        self.current_run = None
+        self.pending_runs = {}
 
 
 
@@ -418,44 +452,75 @@ class AgentApp:
 
         top.pack(fill=tk.BOTH, expand=True)
 
-
+        self.mode_banner = ttk.Label(
+            top,
+            text=self._mode_banner_text(),
+            foreground="#fff",
+            background="#b04c2f" if self.demo_mode else "#2a6f3b",
+            padding=6,
+        )
+        self.mode_banner.pack(fill=tk.X)
 
         self.input_var = tk.StringVar()
-
         input_row = ttk.Frame(top)
-
-        input_row.pack(fill=tk.X)
-
-
+        input_row.pack(fill=tk.X, pady=6)
 
         ttk.Label(input_row, text="Task:").pack(side=tk.LEFT)
-
         entry = ttk.Entry(input_row, textvariable=self.input_var)
-
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-
         entry.bind("<Return>", lambda _e: self.run_command())
 
+        run_btn = ttk.Button(input_row, text="Plan", command=self.run_command)
+        run_btn.pack(side=tk.LEFT, padx=2)
 
+        self.approve_btn = ttk.Button(input_row, text="Approve & Run", command=self.approve_run, state=tk.DISABLED)
+        self.approve_btn.pack(side=tk.LEFT, padx=2)
 
-        run_btn = ttk.Button(input_row, text="Run", command=self.run_command)
+        edit_btn = ttk.Button(input_row, text="Edit Plan", command=self.edit_plan)
+        edit_btn.pack(side=tk.LEFT, padx=2)
 
-        run_btn.pack(side=tk.LEFT)
+        cancel_btn = ttk.Button(input_row, text="Cancel", command=self.cancel_plan)
+        cancel_btn.pack(side=tk.LEFT, padx=2)
 
+        self.pause_btn = ttk.Button(input_row, text="Pause", command=self.toggle_pause)
+        self.pause_btn.pack(side=tk.LEFT, padx=2)
 
+        stop_btn = ttk.Button(input_row, text="Stop", command=self.stop_run)
+        stop_btn.pack(side=tk.LEFT, padx=2)
 
-        self.log = tk.Text(top, wrap=tk.WORD)
+        self.advanced_var = tk.BooleanVar(value=False)
+        adv_toggle = ttk.Checkbutton(
+            input_row, text="Advanced Mode", variable=self.advanced_var, command=self.toggle_advanced_mode
+        )
+        adv_toggle.pack(side=tk.LEFT, padx=6)
 
-        self.log.pack(fill=tk.BOTH, expand=True, pady=8)
+        main_pane = ttk.PanedWindow(top, orient=tk.HORIZONTAL)
+        main_pane.pack(fill=tk.BOTH, expand=True, pady=6)
 
+        left = ttk.Frame(main_pane)
+        right = ttk.Frame(main_pane)
+        main_pane.add(left, weight=3)
+        main_pane.add(right, weight=2)
+
+        self.log = tk.Text(left, wrap=tk.WORD)
+        self.log.pack(fill=tk.BOTH, expand=True)
         self.log.insert(tk.END, "Ready. Type a command and press Enter.\n")
-
         self.log.configure(state=tk.DISABLED)
 
+        ttk.Label(right, text="Plan (Intent → Plan → Proof)").pack(anchor="w")
+        self.plan_text = tk.Text(right, height=10, wrap=tk.WORD)
+        self.plan_text.pack(fill=tk.BOTH, expand=False, pady=4)
+        self.plan_text.configure(state=tk.DISABLED)
 
+        ttk.Label(right, text="Action Cards").pack(anchor="w", pady=(6, 0))
+        cols = ("step", "action", "target", "reason", "status", "timestamp")
+        self.action_tree = ttk.Treeview(right, columns=cols, show="headings", height=10)
+        for col in cols:
+            self.action_tree.heading(col, text=col)
+            self.action_tree.column(col, width=120 if col != "reason" else 200, anchor="w")
+        self.action_tree.pack(fill=tk.BOTH, expand=True)
 
-        help_text = "Just type what you want. No special commands required."
-
+        help_text = "Plan first, then approve to execute. Demo Mode blocks destructive actions."
         ttk.Label(top, text=help_text, foreground="#555").pack(fill=tk.X)
 
 
@@ -492,6 +557,293 @@ class AgentApp:
         self.log_buffer.append(f"[{ts}] {safe}")
         if len(self.log_buffer) > 500:
             self.log_buffer = self.log_buffer[-500:]
+
+    def _mode_banner_text(self) -> str:
+        return "DEMO MODE (SAFE ACTIONS ONLY)" if self.demo_mode else "ADVANCED MODE"
+
+    def _update_mode_banner(self) -> None:
+        if not hasattr(self, "mode_banner"):
+            return
+        self.mode_banner.configure(
+            text=self._mode_banner_text(),
+            background="#b04c2f" if self.demo_mode else "#2a6f3b",
+        )
+
+    def toggle_advanced_mode(self) -> None:
+        self.advanced_mode = bool(self.advanced_var.get())
+        self.demo_mode = not self.advanced_mode
+        self._update_mode_banner()
+        self.log_line("Advanced mode enabled." if self.advanced_mode else "Demo mode enabled.")
+
+    def stop_run(self) -> None:
+        self.stop_event.set()
+        self.pause_event.clear()
+        self._shutdown_browser()
+        self.log_line("STOP requested. Halting after current step.")
+
+    def toggle_pause(self) -> None:
+        if self.pause_event.is_set():
+            self.pause_event.clear()
+            if hasattr(self, "pause_btn"):
+                self.pause_btn.configure(text="Pause")
+            self.log_line("Resumed.")
+        else:
+            self.pause_event.set()
+            if hasattr(self, "pause_btn"):
+                self.pause_btn.configure(text="Resume")
+            self.log_line("Pause requested. Will pause after current step.")
+
+    def _set_plan_text(self, text: str) -> None:
+        if not hasattr(self, "plan_text"):
+            return
+        self.plan_text.configure(state=tk.NORMAL)
+        self.plan_text.delete("1.0", tk.END)
+        self.plan_text.insert(tk.END, text)
+        self.plan_text.configure(state=tk.DISABLED)
+
+    def _reset_action_cards(self, plan_steps: List[PlanStep]) -> None:
+        if not hasattr(self, "action_tree"):
+            return
+        for item in self.action_tree.get_children():
+            self.action_tree.delete(item)
+        self._action_items = {}
+        for step in plan_steps:
+            item_id = self.action_tree.insert(
+                "",
+                tk.END,
+                values=(step.step, step.action, step.target, step.reason, "pending", ""),
+            )
+            self._action_items[step.step] = item_id
+
+    def _set_action_status(self, step_id: int, status: str, timestamp: str) -> None:
+        item_id = getattr(self, "_action_items", {}).get(step_id)
+        if not item_id:
+            return
+        values = list(self.action_tree.item(item_id, "values"))
+        values[4] = status
+        values[5] = timestamp
+        self.action_tree.item(item_id, values=values)
+
+    def _append_extracted(self, text: str) -> None:
+        if not self.current_run or not self.current_run.extracted_path:
+            return
+        with open(self.current_run.extracted_path, "a", encoding="utf-8") as handle:
+            handle.write(text.strip() + "\n\n")
+
+    def _record_action(self, step: PlanStep, status: str, error: str = "") -> None:
+        if not self.current_run or not self.current_run.actions_path:
+            return
+        payload = {
+            "step": step.step,
+            "action": step.action,
+            "target": step.target,
+            "value": step.value,
+            "reason": step.reason,
+            "status": status,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "error": error,
+        }
+        with open(self.current_run.actions_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload) + "\n")
+
+    def _shutdown_browser(self) -> None:
+        try:
+            if self.browser:
+                self.browser.close()
+            if self.playwright:
+                self.playwright.stop()
+        except Exception:
+            pass
+
+    def _build_intent(self, cmd: str) -> Dict[str, str]:
+        return {"goal": cmd, "source": "user"}
+
+    def _normalize_step(self, idx: int, step: str) -> PlanStep:
+        lowered = step.strip().lower()
+        action = "agent"
+        target = step.strip()
+        value = ""
+        reason = "Derived from user intent."
+        command = step.strip()
+
+        if lowered.startswith("browse "):
+            action = "navigate"
+            target = step[7:].strip()
+            reason = "Open the target URL."
+        elif lowered.startswith("search "):
+            action = "search"
+            target = step[7:].strip()
+            reason = "Query the search engine."
+        elif lowered.startswith("click "):
+            action = "click"
+            target = step[6:].strip()
+            reason = "Activate the target UI element."
+        elif lowered.startswith("type "):
+            action = "type"
+            parts = step[5:].split("|", 1)
+            target = parts[0].strip()
+            value = parts[1].strip() if len(parts) > 1 else ""
+            reason = "Enter text into the target field."
+        elif lowered.startswith("press "):
+            action = "press"
+            target = step[6:].strip()
+            reason = "Send a key press."
+        elif lowered.startswith("screenshot "):
+            action = "screenshot"
+            target = step[11:].strip()
+            reason = "Capture a screenshot for proof."
+        elif lowered.startswith("open "):
+            action = "open"
+            target = step[5:].strip()
+            reason = "Open a local file."
+        elif lowered.startswith(("move ", "copy ", "delete ", "mkdir ")):
+            action = "file"
+            target = step.split(" ", 1)[1].strip() if " " in step else ""
+            reason = "Perform a file operation."
+        elif lowered.startswith(("rag ", "hybrid_rag ", "ocr ", "deep_research ", "lit_review ")):
+            action = "extract"
+            target = step.split(" ", 1)[1].strip() if " " in step else ""
+            reason = "Retrieve or extract information."
+        elif lowered.startswith(("workflow ", "graph_add ", "graph_edge ", "graph_query ")):
+            action = "graph"
+            target = step.split(" ", 1)[1].strip() if " " in step else ""
+            reason = "Update or query structured data."
+        elif lowered.startswith("sandbox_run "):
+            action = "sandbox"
+            target = "python"
+            value = step[len("sandbox_run "):].strip()
+            reason = "Execute isolated code."
+
+        return PlanStep(step=idx, action=action, target=target, value=value, reason=reason, command=command)
+
+    def _build_plan(self, cmd: str) -> List[PlanStep]:
+        plan = self.planner.plan(cmd)
+        if not plan:
+            plan = [cmd]
+        steps: List[PlanStep] = []
+        for idx, step in enumerate(plan, 1):
+            steps.append(self._normalize_step(idx, step))
+        return steps
+
+    def _format_plan(self, intent: Dict[str, str], steps: List[PlanStep]) -> str:
+        json_payload = {
+            "intent": intent,
+            "plan_steps": [
+                {
+                    "step": s.step,
+                    "action": s.action,
+                    "target": s.target,
+                    "value": s.value,
+                    "reason": s.reason,
+                }
+                for s in steps
+            ],
+        }
+        bullets = "\n".join([f"{s.step}. {s.action} → {s.target} ({s.reason})" for s in steps])
+        return "PLAN (JSON)\n" + json.dumps(json_payload, indent=2) + "\n\nPLAN (BULLETS)\n" + bullets
+
+    def _create_task_run(self, cmd: str) -> TaskRun:
+        run_id = datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+        intent = self._build_intent(cmd)
+        steps = self._build_plan(cmd)
+        run = TaskRun(
+            run_id=run_id,
+            intent=intent,
+            plan_steps=steps,
+            approved=False,
+            mode="advanced" if self.advanced_mode else "demo",
+            status="planned",
+            created_at=datetime.utcnow().isoformat() + "Z",
+            command=cmd,
+        )
+        self.pending_runs[run_id] = run
+        return run
+
+    def approve_run(self) -> None:
+        if not self.current_run:
+            self.log_line("No plan to approve.")
+            return
+        self.current_run.approved = True
+        self.current_run.status = "approved"
+        self.approve_btn.configure(state=tk.DISABLED)
+        self.task_queue.enqueue(lambda: self._run_task_run(self.current_run))
+
+    def edit_plan(self) -> None:
+        if not self.current_run:
+            return
+        self.input_var.set(self.current_run.command)
+        self.log_line("Plan returned to input for editing.")
+
+    def cancel_plan(self) -> None:
+        if not self.current_run:
+            return
+        self.current_run.status = "cancelled"
+        self.current_run = None
+        self._set_plan_text("")
+        self._reset_action_cards([])
+        self.approve_btn.configure(state=tk.DISABLED)
+        self.log_line("Plan cancelled.")
+
+    def _start_proof_pack(self, run: TaskRun) -> None:
+        base = os.path.join(self.settings.data_dir, "runs", run.run_id)
+        screenshots_dir = os.path.join(base, "screenshots")
+        os.makedirs(screenshots_dir, exist_ok=True)
+        run.run_dir = base
+        run.screenshots_dir = screenshots_dir
+        run.actions_path = os.path.join(base, "actions.jsonl")
+        run.extracted_path = os.path.join(base, "extracted.txt")
+        self._log_event("run_start", {"run_id": run.run_id, "intent": run.intent})
+
+    def _write_summary(self, run: TaskRun) -> None:
+        summary_path = os.path.join(run.run_dir, "summary.md")
+        lines = [
+            f"# Run {run.run_id}",
+            "",
+            f"Status: {run.status}",
+            f"Mode: {run.mode}",
+            "",
+            "## Intent",
+            json.dumps(run.intent, indent=2),
+            "",
+            "## Plan Steps",
+        ]
+        for step in run.plan_steps:
+            lines.append(f"- {step.step}. {step.action} → {step.target} ({step.reason})")
+        with open(summary_path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines))
+
+    def _run_task_run(self, run: TaskRun) -> None:
+        if not run.approved:
+            self.log_line("Execution blocked: plan not approved.")
+            return
+        self.current_run = run
+        self.stop_event.clear()
+        run.status = "running"
+        self._start_proof_pack(run)
+        for step in run.plan_steps:
+            if self.stop_event.is_set():
+                run.status = "stopped"
+                break
+            self._set_action_status(step.step, "running", datetime.utcnow().isoformat() + "Z")
+            self._record_action(step, "running")
+            try:
+                self._execute_step(step.command)
+                self._set_action_status(step.step, "done", datetime.utcnow().isoformat() + "Z")
+                self._record_action(step, "done")
+            except Exception as exc:
+                self._set_action_status(step.step, "failed", datetime.utcnow().isoformat() + "Z")
+                self._record_action(step, "failed", error=str(exc))
+                run.status = "failed"
+                break
+            while self.pause_event.is_set():
+                time.sleep(0.2)
+                if self.stop_event.is_set():
+                    run.status = "stopped"
+                    break
+        if run.status == "running":
+            run.status = "done"
+        self._write_summary(run)
+        self.log_line(f"Proof pack saved to: {run.run_dir}")
 
 
     def _readiness_report(self) -> str:
@@ -969,6 +1321,8 @@ class AgentApp:
             self.log_line(f"Confidence: {conf:.2f}")
 
             self.log_line(answer or "Agent task completed")
+            if answer:
+                self._append_extracted(answer)
 
             return
 
@@ -981,6 +1335,8 @@ class AgentApp:
             output = self.deep_research.run(question)
 
             self.log_line(output)
+            if output:
+                self._append_extracted(output)
 
             return
 
@@ -1029,6 +1385,8 @@ class AgentApp:
             )
             answer = self._agent_chat(prompt)
             self.log_line(answer or "Agent task completed")
+            if answer:
+                self._append_extracted(answer)
             return
 
         if lowered.startswith("lit_review "):
@@ -1043,6 +1401,8 @@ class AgentApp:
                       "Cite sources by name.\n\nEvidence:\n" + ev_text)
             answer = self._agent_chat(prompt)
             self.log_line(answer or "Agent task completed")
+            if answer:
+                self._append_extracted(answer)
             return
 
         if lowered.startswith("analysis_plan "):
@@ -1051,6 +1411,8 @@ class AgentApp:
                       "verification checks, and expected outputs for: " + question)
             answer = self._agent_chat(prompt)
             self.log_line(answer or "Agent task completed")
+            if answer:
+                self._append_extracted(answer)
             return
 
         if lowered.startswith("ownership_companion "):
@@ -1195,6 +1557,8 @@ class AgentApp:
             text = ocr_pdf(path, pages=2)
 
             self.log_line(text[:2000] if text else "No OCR text.")
+            if text:
+                self._append_extracted(text)
 
             return
 
@@ -1203,6 +1567,13 @@ class AgentApp:
             try:
                 saved = capture_screenshot(path)
                 self.log_line(f"Screenshot saved: {saved}")
+                if self.current_run and self.current_run.screenshots_dir:
+                    stamp = datetime.utcnow().strftime("%H%M%S")
+                    target = os.path.join(self.current_run.screenshots_dir, f"{stamp}-desktop.png")
+                    try:
+                        shutil.copy2(saved, target)
+                    except Exception:
+                        pass
             except Exception as exc:
                 self.log_line(f"Screenshot failed: {exc}")
             return
@@ -1337,6 +1708,9 @@ class AgentApp:
 
         if lowered.startswith("sandbox_run "):
             code = step[len("sandbox_run "):].strip()
+            if self.demo_mode:
+                self.log_line("sandbox_run blocked in DEMO MODE.")
+                return
             try:
                 result = run_python(code)
                 self.log_line(json.dumps(result))
@@ -1504,13 +1878,22 @@ class AgentApp:
 
         self.log_line(f"> {cmd}")
 
-        self.task_queue.enqueue(lambda: self._execute(cmd))
+        run = self._create_task_run(cmd)
+        self.current_run = run
+        self._set_plan_text(self._format_plan(run.intent, run.plan_steps))
+        self._reset_action_cards(run.plan_steps)
+        self.approve_btn.configure(state=tk.NORMAL)
+        self.log_line("Plan ready. Review and click Approve & Run.")
 
 
 
     def _execute(self, cmd: str):
 
         try:
+
+            if not self.current_run or not self.current_run.approved:
+                self.log_line("Execution blocked: approve the plan first.")
+                return
 
             self.metrics.inc("tasks_total")
 
@@ -2178,14 +2561,17 @@ def _make_web_handler(app):
 
     <textarea id="cmd"></textarea><br/>
 
-    <button onclick="sendCmd()">Run</button>
+    <button onclick="sendCmd()">Plan</button>
+    <button onclick="approve()">Approve & Run</button>
 
+    <pre id="plan"></pre>
     <pre id="out"></pre>
 
     <pre id="metrics"></pre>
 
     <script>
 
+      let lastRunId = "";
       async function sendCmd() {
 
         const cmd = document.getElementById('cmd').value;
@@ -2201,11 +2587,23 @@ def _make_web_handler(app):
         });
 
         const data = await res.json();
-
-        document.getElementById('out').textContent = data.output || '';
+        lastRunId = data.run_id || '';
+        document.getElementById('plan').textContent = data.plan || '';
 
         await refreshMetrics();
 
+      }
+
+      async function approve() {
+        if (!lastRunId) return;
+        const res = await fetch('/api/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_id: lastRunId })
+        });
+        const data = await res.json();
+        document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+        await refreshMetrics();
       }
 
       async function refreshMetrics() {
@@ -2234,7 +2632,7 @@ def _make_web_handler(app):
 
         def do_POST(self):
 
-            if self.path != "/api/command":
+            if self.path not in ("/api/command", "/api/approve"):
 
                 self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
 
@@ -2250,17 +2648,29 @@ def _make_web_handler(app):
 
                 command = (payload.get("command") or "").strip()
 
+                if self.path == "/api/approve":
+                    run_id = (payload.get("run_id") or "").strip()
+                    run = app.pending_runs.get(run_id)
+                    if not run:
+                        self._send(HTTPStatus.BAD_REQUEST, b"missing run_id", "text/plain")
+                        return
+                    run.approved = True
+                    app.current_run = run
+                    app.task_queue.enqueue(lambda: app._run_task_run(run))
+                    body = json.dumps({"status": "queued", "run_id": run_id}).encode("utf-8")
+                    self._send(HTTPStatus.OK, body, "application/json")
+                    return
+
                 if not command:
 
                     self._send(HTTPStatus.BAD_REQUEST, b"missing command", "text/plain")
 
                     return
 
-                app.task_queue.enqueue_and_wait(lambda: app._execute(command))
-
-                out = app.get_recent_logs(40)
-
-                body = json.dumps({"output": out}).encode("utf-8")
+                run = app._create_task_run(command)
+                app.current_run = run
+                plan_text = app._format_plan(run.intent, run.plan_steps)
+                body = json.dumps({"run_id": run.run_id, "plan": plan_text}).encode("utf-8")
 
                 self._send(HTTPStatus.OK, body, "application/json")
 

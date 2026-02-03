@@ -23,6 +23,7 @@ Local native agentic assistant with a Tkinter UI and web UI.
 python app.py
 ```
 Web UI: `http://127.0.0.1:8333`
+UI now enforces INTENT → PLAN → PROOF. Click “Approve & Run” to execute.
 
 ## Optional Dependencies
 ```powershell
@@ -163,6 +164,7 @@ AGENTIC_ALLOWED_DOMAINS=example.com,openai.com
 AGENTIC_REDACT_LOGS=true
 AGENTIC_PURPOSE=General assistance
 AGENTIC_EVENT_RETENTION_SECONDS=2592000
+AGENTIC_DEMO_MODE=true
 MCP_GITHUB_URL=http://localhost:9000/github
 MCP_DRIVE_URL=http://localhost:9000/drive
 GITHUB_TOKEN=...

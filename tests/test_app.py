@@ -168,6 +168,17 @@ class AppCommandTests(unittest.TestCase):
         self.app.tools = app_mod.ToolRegistry(self.app)
         self.app.retriever = app_mod.RetrieverAgent(self.app.memory)
         self.app.jobs = FakeJobs()
+        self.app.demo_mode = False
+        self.app.current_run = app_mod.TaskRun(
+            run_id="test",
+            intent={"goal": "test", "source": "unit"},
+            plan_steps=[],
+            approved=True,
+            mode="advanced",
+            status="running",
+            created_at="",
+            command="",
+        )
         tool_prefixes = list(self.app.tools.tools.keys())
         tool_prefixes.append("agent")
         self.app.planner = app_mod.PlannerAgent([f"{p} " for p in tool_prefixes])

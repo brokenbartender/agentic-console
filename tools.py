@@ -72,6 +72,8 @@ class ToolRegistry:
             raise RuntimeError(f"Unknown tool: {name}")
         ctx = ctx or ToolContext()
         spec = self.specs.get(name)
+        if getattr(self.app, "demo_mode", False) and name in ("delete", "move"):
+            raise RuntimeError("Blocked in DEMO MODE. Enable Advanced Mode to proceed.")
         if spec:
             self._validate_args(spec, raw_args)
         if spec and spec.confirm_required and not ctx.confirm:

@@ -57,6 +57,7 @@ class Settings:
     redact_logs: str = _env("AGENTIC_REDACT_LOGS", "true")
     purpose: str = _env("AGENTIC_PURPOSE", "")
     event_retention_seconds: int = int(_env("AGENTIC_EVENT_RETENTION_SECONDS", "2592000"))
+    demo_mode: str = _env("AGENTIC_DEMO_MODE", "true")
     openai_cost_input_per_million: float = float(_env("OPENAI_COST_INPUT_PER_1M", "0"))
     openai_cost_output_per_million: float = float(_env("OPENAI_COST_OUTPUT_PER_1M", "0"))
     ollama_cost_input_per_million: float = float(_env("OLLAMA_COST_INPUT_PER_1M", "0"))
