@@ -5,6 +5,7 @@ import json
 from typing import List
 
 from memory import _embed_text, _cosine
+from data_constitution import check_text
 
 
 def _read_pdf_text(path: str, max_pages: int = 30) -> str:
@@ -146,6 +147,9 @@ class RagStore:
                 text = handle.read()
         if not text:
             raise RuntimeError("No text extracted for indexing.")
+        issues = check_text(text)
+        if issues:
+            raise RuntimeError("Data constitution blocked indexing: " + "; ".join(issues))
         try:
             stat = os.stat(path)
             metadata = {
@@ -257,3 +261,20 @@ class RagStore:
             )
         scored.sort(key=lambda x: x["weighted_score"], reverse=True)
         return scored[:limit]
+
+    def hybrid_search(self, query: str, graph_store, limit: int = 5) -> List[dict]:
+        results = self.search(query, limit=limit)
+        try:
+            entities = graph_store.find_entities(query)
+        except Exception:
+            entities = []
+        if not entities:
+            return results
+        expanded_query = query + " " + " ".join(entities)
+        graph_results = self.search(expanded_query, limit=limit)
+        merged = {r["id"]: r for r in results}
+        for item in graph_results:
+            merged.setdefault(item["id"], item)
+        merged_list = list(merged.values())
+        merged_list.sort(key=lambda x: x["weighted_score"], reverse=True)
+        return merged_list[:limit]

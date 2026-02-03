@@ -82,6 +82,7 @@ from micro_saas_tools import (
     dump_assumptions,
 )
 from research_store import ResearchStore
+from safety import screen_text
 from automotive_agents import (
     ownership_companion_prompt,
     dealer_assist_prompt,
@@ -296,6 +297,9 @@ class AgentApp:
         tool_prefixes.append("speak")
         tool_prefixes.append("a2a")
         tool_prefixes.append("mcp")
+        tool_prefixes.append("mcp_resources")
+        tool_prefixes.append("mcp_prompts")
+        tool_prefixes.append("mcp_tools")
         tool_prefixes.append("data_profile")
         tool_prefixes.append("ai_interface")
         tool_prefixes.append("rag_sources")
@@ -355,6 +359,9 @@ class AgentApp:
         tool_prefixes.append("dot_mode")
         tool_prefixes.append("graph_query")
         tool_prefixes.append("perception")
+        tool_prefixes.append("hybrid_rag")
+        tool_prefixes.append("graph_add")
+        tool_prefixes.append("graph_edge")
         tool_prefixes.append("belief")
         tool_prefixes.append("beliefs")
         tool_prefixes.append("desire")
@@ -644,6 +651,9 @@ class AgentApp:
 
         prefer_offline = getattr(self, "edge_mode", "auto") == "offline"
         model_name = _configure_agent(self.settings, instruction, prefer_offline=prefer_offline)
+        safety_hits = screen_text(instruction)
+        if safety_hits:
+            self.log_line(f"Safety screen flagged patterns: {', '.join(safety_hits)}")
 
         oi_interpreter.auto_run = True
 
@@ -1003,6 +1013,21 @@ class AgentApp:
             self.log_line(output or "Agent task completed")
             return
 
+        if lowered.startswith("hybrid_rag "):
+            query = step[len("hybrid_rag "):].strip()
+            evidence = self.rag.hybrid_search(query, self.graph, limit=7)
+            if not evidence:
+                self.log_line("No evidence found. Index documents first.")
+                return
+            ev_text = "\n".join(f"- {e['source']}: {e['text'][:200]}" for e in evidence)
+            prompt = (
+                "Answer using the hybrid evidence below. "
+                "Cite sources by name.\n\nEvidence:\n" + ev_text
+            )
+            answer = self._agent_chat(prompt)
+            self.log_line(answer or "Agent task completed")
+            return
+
         if lowered.startswith("lit_review "):
             query = step[len("lit_review "):].strip()
             evidence = self._rag_search(query, limit=7)
@@ -1206,6 +1231,33 @@ class AgentApp:
                 self.log_line(f"Speak failed: {exc}")
             return
 
+        if lowered.startswith("mcp_resources "):
+            provider = step[len("mcp_resources "):].strip()
+            try:
+                result = self.mcp.list_resources(provider)
+                self.log_line(json.dumps(result))
+            except Exception as exc:
+                self.log_line(f"mcp_resources error: {exc}")
+            return
+
+        if lowered.startswith("mcp_prompts "):
+            provider = step[len("mcp_prompts "):].strip()
+            try:
+                result = self.mcp.list_prompts(provider)
+                self.log_line(json.dumps(result))
+            except Exception as exc:
+                self.log_line(f"mcp_prompts error: {exc}")
+            return
+
+        if lowered.startswith("mcp_tools "):
+            provider = step[len("mcp_tools "):].strip()
+            try:
+                result = self.mcp.list_tools(provider)
+                self.log_line(json.dumps(result))
+            except Exception as exc:
+                self.log_line(f"mcp_tools error: {exc}")
+            return
+
         if lowered.startswith("workflow "):
             raw = step[len("workflow "):].strip()
             if "|" not in raw:
@@ -1252,6 +1304,32 @@ class AgentApp:
                 self.log_line("No graph neighbors found.")
                 return
             self.log_line(json.dumps(results))
+            return
+
+        if lowered.startswith("graph_add "):
+            raw = step[len("graph_add "):].strip()
+            if "|" not in raw:
+                self.log_line("graph_add requires: graph_add name | type")
+                return
+            name, etype = [s.strip() for s in raw.split("|", 1)]
+            entity_id = self.graph.add_entity(name, etype)
+            self.log_line(f"Graph entity added: {entity_id}")
+            return
+
+        if lowered.startswith("graph_edge "):
+            raw = step[len("graph_edge "):].strip()
+            if "|" not in raw:
+                self.log_line("graph_edge requires: graph_edge src | rel | dst")
+                return
+            parts = [s.strip() for s in raw.split("|")]
+            if len(parts) != 3:
+                self.log_line("graph_edge requires: graph_edge src | rel | dst")
+                return
+            src, rel, dst = parts
+            src_id = self.graph.add_entity(src, "concept")
+            dst_id = self.graph.add_entity(dst, "concept")
+            edge_id = self.graph.add_edge(src_id, rel, dst_id)
+            self.log_line(f"Graph edge added: {edge_id}")
             return
 
         if lowered.startswith("perception"):

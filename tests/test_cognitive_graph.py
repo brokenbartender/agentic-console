@@ -3,6 +3,7 @@ import unittest
 
 from cognitive import slow_mode, dot_ensemble
 from graph_rag import GraphStore
+from rag import RagStore
 
 
 class CognitiveGraphTests(unittest.TestCase):
@@ -44,6 +45,20 @@ class CognitiveGraphTests(unittest.TestCase):
             neighbors,
             [{"name": "Beta", "type": "concept", "rel": "related_to"}],
         )
+
+    def test_hybrid_search(self):
+        class DummyMemory:
+            def __init__(self):
+                self._conn = sqlite3.connect(":memory:")
+                self.embedding_dim = 4
+
+        mem = DummyMemory()
+        rag = RagStore(mem)
+        graph = GraphStore(mem._conn)
+        rag.index_text("source.txt", "Alpha mentions Beta")
+        graph.add_entity("Alpha", "concept")
+        results = rag.hybrid_search("Alpha", graph, limit=3)
+        self.assertTrue(len(results) >= 1)
 
 
 if __name__ == "__main__":

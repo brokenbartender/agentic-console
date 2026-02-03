@@ -30,6 +30,15 @@ class MCPAdapter:
             return self._call_drive(payload)
         raise RuntimeError(f"Unknown MCP provider: {name}")
 
+    def list_resources(self, name: str) -> Dict[str, Any]:
+        return self.call(name, {"action": "resources"})
+
+    def list_prompts(self, name: str) -> Dict[str, Any]:
+        return self.call(name, {"action": "prompts"})
+
+    def list_tools(self, name: str) -> Dict[str, Any]:
+        return self.call(name, {"action": "tools"})
+
     def _call_remote(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         resp = requests.post(url, json=payload, timeout=30)
         resp.raise_for_status()
@@ -53,6 +62,12 @@ class MCPAdapter:
             resp = requests.get(f"{base}/repos/{owner}/{repo}/issues", headers=headers, timeout=30)
             resp.raise_for_status()
             return resp.json()
+        if action == "resources":
+            return {"resources": ["repo", "issues"]}
+        if action == "prompts":
+            return {"prompts": []}
+        if action == "tools":
+            return {"tools": ["repo", "issues"]}
         raise RuntimeError("Unsupported github action")
 
     def _call_drive(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -65,4 +80,10 @@ class MCPAdapter:
             resp = requests.get(f"{base}/files", headers=headers, timeout=30)
             resp.raise_for_status()
             return resp.json()
+        if action == "resources":
+            return {"resources": ["files"]}
+        if action == "prompts":
+            return {"prompts": []}
+        if action == "tools":
+            return {"tools": ["files"]}
         raise RuntimeError("Unsupported drive action")

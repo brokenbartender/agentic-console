@@ -14,7 +14,7 @@ This roadmap translates the provided architectural framework into staged, codeba
 - [ ] Archival memory summaries (compressed descriptors).
 - [ ] Procedural memory registry integration.
 - [x] GraphRAG schema (entity/edge tables).
-- [ ] Hybrid retrieval: vector + graph traversal.
+- [x] Hybrid retrieval: vector + graph traversal.
 
 ## Phase 3: Sensory Perception (Senses)
 - [x] Perception aggregator F (baseline screenshot/metadata).
@@ -22,7 +22,7 @@ This roadmap translates the provided architectural framework into staged, codeba
 - [ ] Optional wake-word listener (opt-in).
 
 ## Phase 4: Tooling & Execution (Hands)
-- [ ] MCP resources/prompts support in adapter.
+- [x] MCP resources/prompts support in adapter.
 - [ ] Tool schema validation + argument normalization (poka-yoke).
 - [ ] Sandboxed execution for generated code.
 
@@ -32,8 +32,8 @@ This roadmap translates the provided architectural framework into staged, codeba
 - [ ] Reference-based messaging artifacts.
 
 ## Phase 6: Governance & Safety (Guardrails)
-- [ ] Data constitution file + pre-ingest checks.
-- [ ] Parallel safety screening (sectioning pattern).
+- [x] Data constitution file + pre-ingest checks.
+- [x] Parallel safety screening (sectioning pattern).
 - [ ] PII redaction pipeline (optional).
 - [ ] Confidence calibration hooks + UQ tracking.
 

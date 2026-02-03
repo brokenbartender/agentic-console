@@ -36,6 +36,7 @@ python -m pip install pyttsx3
 ## Commands
 - `index <path>`: index a file or directory
 - `rag <query>`: answer with evidence + confidence
+- `hybrid_rag <query>`: answer using vector + graph hints
 - `rag_sources`: list indexed sources + ranks
 - `rag_rank <source> <rank>`: set a source rank (0.0-2.0)
 - `deep_research <question>`: plan + reflect + answer
@@ -52,6 +53,11 @@ python -m pip install pyttsx3
 - `slow_mode on|off`: enable deliberate System 2 pass
 - `dot_mode on|off`: enable diversity-of-thoughts drafting
 - `graph_query <entity>`: query GraphRAG neighbors for an entity
+- `graph_add <name> | <type>`: add graph entity
+- `graph_edge <src> | <rel> | <dst>`: add graph relation
+- `mcp_resources <provider>`: list MCP resources
+- `mcp_prompts <provider>`: list MCP prompts
+- `mcp_tools <provider>`: list MCP tools
 - `assumption_add label | value | status | source`: save a market assumption
 - `assumption_list`: list market assumptions
 - `roadmap12 <niche>`: 12-week MVP roadmap

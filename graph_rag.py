@@ -70,3 +70,14 @@ class GraphStore:
         for name, etype, rel in cur.fetchall():
             results.append({"name": name, "type": etype, "rel": rel})
         return results
+
+    def find_entities(self, query: str) -> List[str]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT name FROM graph_entities")
+        names = [row[0] for row in cur.fetchall()]
+        lowered = query.lower()
+        hits = []
+        for name in names:
+            if name.lower() in lowered or lowered in name.lower():
+                hits.append(name)
+        return hits
