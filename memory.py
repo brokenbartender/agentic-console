@@ -156,6 +156,17 @@ class MemoryStore:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bdi_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                kind TEXT NOT NULL,
+                text TEXT NOT NULL,
+                owner TEXT
+            )
+            """
+        )
         self._conn.commit()
 
     def set(self, key: str, value: str) -> None:
@@ -351,6 +362,27 @@ class MemoryStore:
         return [
             {"id": rid, "timestamp": ts, "rule": rule, "severity": severity}
             for (rid, ts, rule, severity) in rows
+        ]
+
+    def add_bdi(self, kind: str, text: str, owner: str | None = None) -> int:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO bdi_entries (timestamp, kind, text, owner) VALUES (?, ?, ?, ?)",
+            (time.time(), kind, text, owner or ""),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_bdi(self, kind: str, limit: int = 20) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, kind, text, owner FROM bdi_entries WHERE kind=? ORDER BY id DESC LIMIT ?",
+            (kind, limit),
+        )
+        rows = cur.fetchall()
+        return [
+            {"id": rid, "timestamp": ts, "kind": k, "text": text, "owner": owner or ""}
+            for (rid, ts, k, text, owner) in rows
         ]
 
     def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:

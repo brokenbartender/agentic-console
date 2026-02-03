@@ -73,6 +73,14 @@ python -m pip install pyttsx3
 - `oversight_scaling`: checklist for scaling human oversight
 - `security_first`: checklist for security-first agentic coding
 - `agent_surfaces`: summary of new agentic coding surfaces
+- `pillars`: summarize perception/reasoning/planning/learning/verification/execution
+- `vertical_agents`: list industry-specific agent templates
+- `belief <text>`: store a belief (BDI)
+- `beliefs`: list beliefs
+- `desire <text>`: store a desire (BDI)
+- `desires`: list desires
+- `intention <text>`: store an intention (BDI)
+- `intentions`: list intentions
 - `lab_note <text>`: save a lab notebook note
 - `hypothesis <text>`: save a hypothesis
 - `hypotheses`: list hypotheses

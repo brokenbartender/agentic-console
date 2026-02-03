@@ -84,6 +84,7 @@ from coding_trends import (
     security_first_checklist,
     agent_surfaces_summary,
 )
+from bdi_tools import agentic_pillars_summary, vertical_agent_templates
 
 
 # Lazy imports for optional dependencies
@@ -314,6 +315,14 @@ class AgentApp:
         tool_prefixes.append("oversight_scaling")
         tool_prefixes.append("security_first")
         tool_prefixes.append("agent_surfaces")
+        tool_prefixes.append("pillars")
+        tool_prefixes.append("vertical_agents")
+        tool_prefixes.append("belief")
+        tool_prefixes.append("beliefs")
+        tool_prefixes.append("desire")
+        tool_prefixes.append("desires")
+        tool_prefixes.append("intention")
+        tool_prefixes.append("intentions")
         tool_prefixes.append("lab_note")
         tool_prefixes.append("readiness")
         tool_prefixes.append("governance")
@@ -890,6 +899,14 @@ class AgentApp:
             self.log_line(agent_surfaces_summary())
             return
 
+        if lowered == "pillars":
+            self.log_line(agentic_pillars_summary())
+            return
+
+        if lowered == "vertical_agents":
+            self.log_line(vertical_agent_templates())
+            return
+
         if lowered.startswith("lab_note "):
             note = step[len("lab_note "):].strip()
             self.memory.add_memory("lab_note", note, ttl_seconds=self.settings.long_memory_ttl)
@@ -1250,6 +1267,42 @@ class AgentApp:
                     f"{r['id']} {r['name']} {r['role']}"
                     for r in rows
                 ) or "No personas."
+                self.log_line(out)
+                return
+
+            if lowered.startswith("belief "):
+                text = cmd.split(" ", 1)[1].strip()
+                bid = self.memory.add_bdi("belief", text, owner=self.purpose or "")
+                self.log_line(f"Belief saved: {bid}")
+                return
+
+            if lowered == "beliefs":
+                rows = self.memory.list_bdi("belief", 10)
+                out = "\n".join(f"{r['id']} {r['text']}" for r in rows) or "No beliefs."
+                self.log_line(out)
+                return
+
+            if lowered.startswith("desire "):
+                text = cmd.split(" ", 1)[1].strip()
+                did = self.memory.add_bdi("desire", text, owner=self.purpose or "")
+                self.log_line(f"Desire saved: {did}")
+                return
+
+            if lowered == "desires":
+                rows = self.memory.list_bdi("desire", 10)
+                out = "\n".join(f"{r['id']} {r['text']}" for r in rows) or "No desires."
+                self.log_line(out)
+                return
+
+            if lowered.startswith("intention "):
+                text = cmd.split(" ", 1)[1].strip()
+                iid = self.memory.add_bdi("intention", text, owner=self.purpose or "")
+                self.log_line(f"Intention saved: {iid}")
+                return
+
+            if lowered == "intentions":
+                rows = self.memory.list_bdi("intention", 10)
+                out = "\n".join(f"{r['id']} {r['text']}" for r in rows) or "No intentions."
                 self.log_line(out)
                 return
 
