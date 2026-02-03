@@ -77,6 +77,12 @@ from agent_profiles import (
     misalignment_checklist,
     readiness_framework,
 )
+from coding_trends import (
+    sdlc_shift_summary,
+    oversight_scaling_checklist,
+    security_first_checklist,
+    agent_surfaces_summary,
+)
 
 
 # Lazy imports for optional dependencies
@@ -294,6 +300,16 @@ class AgentApp:
         tool_prefixes.append("agent_types")
         tool_prefixes.append("misalignment_check")
         tool_prefixes.append("readiness_framework")
+        tool_prefixes.append("long_run")
+        tool_prefixes.append("long_run_update")
+        tool_prefixes.append("long_runs")
+        tool_prefixes.append("oversight_rule")
+        tool_prefixes.append("oversight_rules")
+        tool_prefixes.append("agent_team")
+        tool_prefixes.append("sdlc_shift")
+        tool_prefixes.append("oversight_scaling")
+        tool_prefixes.append("security_first")
+        tool_prefixes.append("agent_surfaces")
         tool_prefixes.append("lab_note")
         tool_prefixes.append("readiness")
         tool_prefixes.append("governance")
@@ -854,6 +870,22 @@ class AgentApp:
             self.log_line(readiness_framework())
             return
 
+        if lowered == "sdlc_shift":
+            self.log_line(sdlc_shift_summary())
+            return
+
+        if lowered == "oversight_scaling":
+            self.log_line(oversight_scaling_checklist())
+            return
+
+        if lowered == "security_first":
+            self.log_line(security_first_checklist())
+            return
+
+        if lowered == "agent_surfaces":
+            self.log_line(agent_surfaces_summary())
+            return
+
         if lowered.startswith("lab_note "):
             note = step[len("lab_note "):].strip()
             self.memory.add_memory("lab_note", note, ttl_seconds=self.settings.long_memory_ttl)
@@ -1179,6 +1211,74 @@ class AgentApp:
                     for r in rows
                 ) or "No personas."
                 self.log_line(out)
+                return
+
+            if lowered.startswith("long_run "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                if "|" not in raw:
+                    self.log_line("long_run requires: long_run <title> | <milestones>")
+                    return
+                title, milestones = [s.strip() for s in raw.split("|", 1)]
+                rid = self.memory.add_long_run(title, milestones)
+                self.log_line(f"Long run saved: {rid}")
+                return
+
+            if lowered.startswith("long_run_update "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                parts = [s.strip() for s in raw.split("|", 2)]
+                if len(parts) < 2:
+                    self.log_line("long_run_update requires: long_run_update <id> | <status> | <note>")
+                    return
+                try:
+                    run_id = int(parts[0])
+                except Exception:
+                    self.log_line("long_run_update requires numeric id")
+                    return
+                status = parts[1]
+                note = parts[2] if len(parts) > 2 else ""
+                self.memory.update_long_run(run_id, status, note)
+                self.log_line("Long run updated.")
+                return
+
+            if lowered == "long_runs":
+                rows = self.memory.list_long_runs(10)
+                out = "\n".join(
+                    f"{r['id']} {r['status']} {r['title']}"
+                    for r in rows
+                ) or "No long runs."
+                self.log_line(out)
+                return
+
+            if lowered.startswith("oversight_rule "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                if "|" not in raw:
+                    self.log_line("oversight_rule requires: oversight_rule <rule> | <severity>")
+                    return
+                rule, severity = [s.strip() for s in raw.split("|", 1)]
+                oid = self.memory.add_oversight_rule(rule, severity)
+                self.log_line(f"Oversight rule saved: {oid}")
+                return
+
+            if lowered == "oversight_rules":
+                rows = self.memory.list_oversight_rules(10)
+                out = "\n".join(
+                    f"{r['id']} {r['severity']} {r['rule']}"
+                    for r in rows
+                ) or "No oversight rules."
+                self.log_line(out)
+                return
+
+            if lowered.startswith("agent_team "):
+                task = cmd.split(" ", 1)[1].strip()
+                roles = [
+                    AgentRole("Planner", "Create a brief plan."),
+                    AgentRole("Builder", "Execute the plan or draft the solution."),
+                    AgentRole("Reviewer", "Review for issues and improvements."),
+                    AgentRole("Security", "Check for security risks or dual-use concerns."),
+                    AgentRole("QA", "Validate correctness and edge cases."),
+                ]
+                output = self.team.run(roles, task)
+                self.log_line(output)
                 return
 
             if lowered.startswith("hypothesis "):

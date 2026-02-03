@@ -57,6 +57,16 @@ python -m pip install pytesseract pillow pymupdf
 - `agent_types`: show AI agent types
 - `misalignment_check`: checklist for agent misalignment risks
 - `readiness_framework`: deployment readiness checklist
+- `long_run <title> | <milestones>`: track long-running agent work
+- `long_run_update <id> | <status> | <note>`: update long-run status
+- `long_runs`: list long-running tasks
+- `oversight_rule <rule> | <severity>`: add human-oversight rule
+- `oversight_rules`: list oversight rules
+- `agent_team <task>`: multi-agent coding team (planner/builder/reviewer/security/QA)
+- `sdlc_shift`: summary of SDLC changes with agents
+- `oversight_scaling`: checklist for scaling human oversight
+- `security_first`: checklist for security-first agentic coding
+- `agent_surfaces`: summary of new agentic coding surfaces
 - `lab_note <text>`: save a lab notebook note
 - `hypothesis <text>`: save a hypothesis
 - `hypotheses`: list hypotheses

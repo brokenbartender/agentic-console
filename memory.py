@@ -134,6 +134,28 @@ class MemoryStore:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS long_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                title TEXT NOT NULL,
+                milestones TEXT,
+                status TEXT NOT NULL,
+                last_checkin REAL NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS oversight_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                rule TEXT NOT NULL,
+                severity TEXT NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def set(self, key: str, value: str) -> None:
@@ -271,6 +293,64 @@ class MemoryStore:
                 "owner": owner or "",
             }
             for (rid, ts, name, role, constraints, owner) in rows
+        ]
+
+    def add_long_run(self, title: str, milestones: str | None = None) -> int:
+        now = time.time()
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO long_runs (timestamp, title, milestones, status, last_checkin) VALUES (?, ?, ?, ?, ?)",
+            (now, title, milestones or "", "active", now),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def update_long_run(self, run_id: int, status: str, note: str | None = None) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "UPDATE long_runs SET status=?, milestones=?, last_checkin=? WHERE id=?",
+            (status, note or "", time.time(), run_id),
+        )
+        self._conn.commit()
+
+    def list_long_runs(self, limit: int = 20) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, title, milestones, status, last_checkin FROM long_runs ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "id": rid,
+                "timestamp": ts,
+                "title": title,
+                "milestones": milestones or "",
+                "status": status,
+                "last_checkin": last_checkin,
+            }
+            for (rid, ts, title, milestones, status, last_checkin) in rows
+        ]
+
+    def add_oversight_rule(self, rule: str, severity: str) -> int:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO oversight_rules (timestamp, rule, severity) VALUES (?, ?, ?)",
+            (time.time(), rule, severity),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_oversight_rules(self, limit: int = 20) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, rule, severity FROM oversight_rules ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {"id": rid, "timestamp": ts, "rule": rule, "severity": severity}
+            for (rid, ts, rule, severity) in rows
         ]
 
     def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:
