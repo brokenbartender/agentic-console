@@ -65,6 +65,18 @@ from playbook_tools import (
     default_personas,
     synthetic_test_prompt,
 )
+from micro_saas_tools import (
+    parse_assumption,
+    format_assumptions,
+    roadmap_12_weeks,
+    pricing_simulator,
+    gtm_channel_plan,
+    data_moat_prompt,
+    aha_validator,
+    compliance_checklist,
+    load_assumptions,
+    dump_assumptions,
+)
 from research_store import ResearchStore
 from automotive_agents import (
     ownership_companion_prompt,
@@ -287,6 +299,14 @@ class AgentApp:
         tool_prefixes.append("personalization")
         tool_prefixes.append("ai_marketing")
         tool_prefixes.append("strategy")
+        tool_prefixes.append("assumption_add")
+        tool_prefixes.append("assumption_list")
+        tool_prefixes.append("roadmap12")
+        tool_prefixes.append("pricing_sim")
+        tool_prefixes.append("gtm_plan")
+        tool_prefixes.append("data_moat")
+        tool_prefixes.append("aha_validate")
+        tool_prefixes.append("compliance")
         tool_prefixes.append("synthetic_test")
         tool_prefixes.append("lit_review")
         tool_prefixes.append("analysis_plan")
@@ -805,6 +825,61 @@ class AgentApp:
             self.log_line(f"Updated {updated} chunks for {source} (rank={rank:.2f})")
             return
 
+        if lowered.startswith("assumption_add "):
+            raw = step[len("assumption_add "):].strip()
+            assumption = parse_assumption(raw)
+            existing = load_assumptions(self.memory.get("market_assumptions") or "")
+            existing.append(assumption)
+            self.memory.set("market_assumptions", dump_assumptions(existing))
+            self.log_line(f"Added assumption: {assumption.label}")
+            return
+
+        if lowered == "assumption_list":
+            items = load_assumptions(self.memory.get("market_assumptions") or "")
+            self.log_line(format_assumptions(items))
+            return
+
+        if lowered.startswith("roadmap12 "):
+            niche = step[len("roadmap12 "):].strip()
+            if not niche:
+                raise RuntimeError("roadmap12 requires a niche")
+            self.log_line(roadmap_12_weeks(niche))
+            return
+
+        if lowered.startswith("pricing_sim "):
+            parts = step.split()
+            if len(parts) < 3:
+                raise RuntimeError("pricing_sim requires: pricing_sim <price> <target_mrr>")
+            price = float(parts[1])
+            target = float(parts[2])
+            self.log_line(pricing_simulator(price, target))
+            return
+
+        if lowered.startswith("gtm_plan "):
+            niche = step[len("gtm_plan "):].strip()
+            if not niche:
+                raise RuntimeError("gtm_plan requires a niche")
+            self.log_line(gtm_channel_plan(niche))
+            return
+
+        if lowered.startswith("data_moat "):
+            niche = step[len("data_moat "):].strip()
+            if not niche:
+                raise RuntimeError("data_moat requires a niche")
+            self.log_line(data_moat_prompt(niche))
+            return
+
+        if lowered.startswith("aha_validate "):
+            niche = step[len("aha_validate "):].strip()
+            if not niche:
+                raise RuntimeError("aha_validate requires a niche")
+            self.log_line(aha_validator(niche))
+            return
+
+        if lowered == "compliance":
+            self.log_line(compliance_checklist())
+            return
+
         if lowered.startswith("index "):
 
             path = step[6:].strip()
@@ -1292,6 +1367,61 @@ class AgentApp:
                 if not query:
                     raise RuntimeError("explain requires a query")
                 self.log_line(self._explain_query(query))
+                return
+
+            if lowered.startswith("assumption_add "):
+                raw = cmd[len("assumption_add "):].strip()
+                assumption = parse_assumption(raw)
+                existing = load_assumptions(self.memory.get("market_assumptions") or "")
+                existing.append(assumption)
+                self.memory.set("market_assumptions", dump_assumptions(existing))
+                self.log_line(f"Added assumption: {assumption.label}")
+                return
+
+            if lowered == "assumption_list":
+                items = load_assumptions(self.memory.get("market_assumptions") or "")
+                self.log_line(format_assumptions(items))
+                return
+
+            if lowered.startswith("roadmap12 "):
+                niche = cmd[len("roadmap12 "):].strip()
+                if not niche:
+                    raise RuntimeError("roadmap12 requires a niche")
+                self.log_line(roadmap_12_weeks(niche))
+                return
+
+            if lowered.startswith("pricing_sim "):
+                parts = cmd.split()
+                if len(parts) < 3:
+                    raise RuntimeError("pricing_sim requires: pricing_sim <price> <target_mrr>")
+                price = float(parts[1])
+                target = float(parts[2])
+                self.log_line(pricing_simulator(price, target))
+                return
+
+            if lowered.startswith("gtm_plan "):
+                niche = cmd[len("gtm_plan "):].strip()
+                if not niche:
+                    raise RuntimeError("gtm_plan requires a niche")
+                self.log_line(gtm_channel_plan(niche))
+                return
+
+            if lowered.startswith("data_moat "):
+                niche = cmd[len("data_moat "):].strip()
+                if not niche:
+                    raise RuntimeError("data_moat requires a niche")
+                self.log_line(data_moat_prompt(niche))
+                return
+
+            if lowered.startswith("aha_validate "):
+                niche = cmd[len("aha_validate "):].strip()
+                if not niche:
+                    raise RuntimeError("aha_validate requires a niche")
+                self.log_line(aha_validator(niche))
+                return
+
+            if lowered == "compliance":
+                self.log_line(compliance_checklist())
                 return
 
 

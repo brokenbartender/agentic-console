@@ -47,6 +47,14 @@ python -m pip install pyttsx3
 - `explain <query>`: show routing + memory/evidence hints
 - `telemetry`: show metrics snapshot
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
+- `assumption_add label | value | status | source`: save a market assumption
+- `assumption_list`: list market assumptions
+- `roadmap12 <niche>`: 12-week MVP roadmap
+- `pricing_sim <price> <target_mrr>`: pricing + customer count
+- `gtm_plan <niche>`: GTM channel plan
+- `data_moat <niche>`: data moat prompts
+- `aha_validate <niche>`: aha-moment validator
+- `compliance`: GDPR/EU AI Act checklist
 - `purpose <text>`: set a task purpose (used in audit logs)
 - `readiness`: show AI readiness snapshot
 - `governance`: show AI governance checklist + red flags
