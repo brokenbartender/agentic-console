@@ -64,6 +64,7 @@ from playbook_tools import (
     default_personas,
     synthetic_test_prompt,
 )
+from research_store import ResearchStore
 
 
 # Lazy imports for optional dependencies
@@ -226,6 +227,7 @@ class AgentApp:
         self.tools = ToolRegistry(self)
 
         self.rag = RagStore(self.memory)
+        self.research = ResearchStore(self.memory._conn)
         self.jobs = JobStore(self.memory._conn)
         self.a2a = A2ABus(self.memory)
         self.mcp = MCPAdapter()
@@ -245,6 +247,12 @@ class AgentApp:
         tool_prefixes.append("ai_marketing")
         tool_prefixes.append("strategy")
         tool_prefixes.append("synthetic_test")
+        tool_prefixes.append("lit_review")
+        tool_prefixes.append("analysis_plan")
+        tool_prefixes.append("hypothesis")
+        tool_prefixes.append("experiment")
+        tool_prefixes.append("experiment_update")
+        tool_prefixes.append("lab_note")
         tool_prefixes.append("readiness")
         tool_prefixes.append("governance")
         tool_prefixes.append("agent")
@@ -261,6 +269,7 @@ class AgentApp:
         self.autonomy_level = self.memory.get("autonomy_level") or settings.autonomy_level
 
         self.purpose = self.memory.get("purpose") or settings.purpose
+        self.analysis_mode = self.memory.get("analysis_mode") or "fast"
         self.redact_logs = settings.redact_logs.lower() == "true"
         self.memory.purge_events(settings.event_retention_seconds)
 
@@ -483,6 +492,11 @@ class AgentApp:
         )
 
         purpose = getattr(self, "purpose", "")
+        mode = getattr(self, "analysis_mode", "fast")
+        if mode == "rigorous":
+            oi_interpreter.system_message += (
+                " Use checkable steps, verify calculations, and cite sources where possible."
+            )
         if purpose:
             oi_interpreter.system_message += f" Current purpose: {purpose}."
 
@@ -693,6 +707,34 @@ class AgentApp:
             prompt = synthetic_test_prompt(scenario, personas)
             output = self._agent_chat(prompt)
             self.log_line(output or "Agent task completed")
+            return
+
+        if lowered.startswith("lit_review "):
+            query = step[len("lit_review "):].strip()
+            evidence = self._rag_search(query, limit=7)
+            if not evidence:
+                self.log_line("No evidence found. Index documents first.")
+                return
+            ev_text = "\n".join(f"- {e['source']}: {e['text'][:200]}" for e in evidence)
+            prompt = ("Summarize the literature from the evidence below. "
+                      "Include key claims, limitations, and open questions. "
+                      "Cite sources by name.\n\nEvidence:\n" + ev_text)
+            answer = self._agent_chat(prompt)
+            self.log_line(answer or "Agent task completed")
+            return
+
+        if lowered.startswith("analysis_plan "):
+            question = step[len("analysis_plan "):].strip()
+            prompt = ("Create a rigorous analysis plan with steps, data needed, "
+                      "verification checks, and expected outputs for: " + question)
+            answer = self._agent_chat(prompt)
+            self.log_line(answer or "Agent task completed")
+            return
+
+        if lowered.startswith("lab_note "):
+            note = step[len("lab_note "):].strip()
+            self.memory.add_memory("lab_note", note, ttl_seconds=self.settings.long_memory_ttl)
+            self.log_line("Lab note saved.")
             return
 
         if lowered.startswith("team "):
@@ -944,6 +986,79 @@ class AgentApp:
                 return
 
 
+
+            if lowered.startswith("mode "):
+                value = lowered.split(" ", 1)[1].strip()
+                if value not in ("fast", "rigorous"):
+                    self.log_line("Mode must be fast or rigorous")
+                    return
+                self.analysis_mode = value
+                self.memory.set("analysis_mode", value)
+                self.log_line(f"Mode set to {value}")
+                return
+
+            if lowered.startswith("hypothesis "):
+                text = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+                if not text:
+                    self.log_line("hypothesis requires text")
+                    return
+                if hasattr(self, "research"):
+                    hid = self.research.add_hypothesis(text)
+                    self.log_line(f"Hypothesis saved: {hid}")
+                else:
+                    self.log_line("Research store unavailable")
+                return
+
+            if lowered == "hypotheses":
+                if hasattr(self, "research"):
+                    rows = self.research.list_hypotheses(10)
+                    out = "\n".join(f"{r['id']} {r['status']} {r['text']}" for r in rows) or "No hypotheses."
+                    self.log_line(out)
+                else:
+                    self.log_line("Research store unavailable")
+                return
+
+            if lowered.startswith("experiment "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                if "|" not in raw:
+                    self.log_line("experiment requires: experiment <title> | <plan>")
+                    return
+                title, plan = [s.strip() for s in raw.split("|", 1)]
+                if hasattr(self, "research"):
+                    eid = self.research.add_experiment(title, plan)
+                    self.log_line(f"Experiment saved: {eid}")
+                else:
+                    self.log_line("Research store unavailable")
+                return
+
+            if lowered == "experiments":
+                if hasattr(self, "research"):
+                    rows = self.research.list_experiments(10)
+                    out = "\n".join(f"{r['id']} {r['status']} {r['title']}" for r in rows) or "No experiments."
+                    self.log_line(out)
+                else:
+                    self.log_line("Research store unavailable")
+                return
+
+            if lowered.startswith("experiment_update "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                parts = [s.strip() for s in raw.split("|", 2)]
+                if len(parts) < 2:
+                    self.log_line("experiment_update requires: experiment_update <id> | <status> | <notes>")
+                    return
+                try:
+                    exp_id = int(parts[0])
+                except Exception:
+                    self.log_line("experiment_update requires numeric id")
+                    return
+                status = parts[1]
+                notes = parts[2] if len(parts) > 2 else ""
+                if hasattr(self, "research"):
+                    self.research.update_experiment(exp_id, status, notes)
+                    self.log_line("Experiment updated.")
+                else:
+                    self.log_line("Research store unavailable")
+                return
 
             if lowered.startswith("purpose"):
                 value = cmd.split(" ", 1)[1].strip() if " " in cmd else ""

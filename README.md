@@ -45,6 +45,15 @@ python -m pip install pytesseract pillow pymupdf
 - `ai_marketing`: checklist for marketing to AI systems
 - `strategy`: checklist for AI-driven planning and resource allocation
 - `synthetic_test <scenario>`: synthetic user critique using personas
+- `lit_review <query>`: literature summary from indexed evidence
+- `analysis_plan <question>`: rigorous analysis plan template
+- `lab_note <text>`: save a lab notebook note
+- `hypothesis <text>`: save a hypothesis
+- `hypotheses`: list hypotheses
+- `experiment <title> | <plan>`: save an experiment plan
+- `experiments`: list experiments
+- `experiment_update <id> | <status> | <notes>`: update experiment status
+- `mode <fast|rigorous>`: toggle analysis mode
 - `models`: show model run summary (latency/tokens/cost)
 - `feedback <rating> | <notes>`: log user feedback
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
