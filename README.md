@@ -40,6 +40,11 @@ python -m pip install pytesseract pillow pymupdf
 - `readiness`: show AI readiness snapshot
 - `governance`: show AI governance checklist + red flags
 - `data_profile <path>`: quick CSV/TSV missingness scan
+- `ai_interface`: checklist for agent-native interface design
+- `personalization`: checklist for generative personalization readiness
+- `ai_marketing`: checklist for marketing to AI systems
+- `strategy`: checklist for AI-driven planning and resource allocation
+- `synthetic_test <scenario>`: synthetic user critique using personas
 - `models`: show model run summary (latency/tokens/cost)
 - `feedback <rating> | <notes>`: log user feedback
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)

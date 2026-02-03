@@ -56,6 +56,14 @@ from mcp_adapter import MCPAdapter
 from privacy import redact_text
 from cost import estimate_tokens, estimate_cost
 from data_quality import profile_tabular
+from playbook_tools import (
+    interface_checklist,
+    personalization_checklist,
+    ai_marketing_checklist,
+    strategic_planning_checklist,
+    default_personas,
+    synthetic_test_prompt,
+)
 
 
 # Lazy imports for optional dependencies
@@ -232,6 +240,11 @@ class AgentApp:
         tool_prefixes.append("a2a")
         tool_prefixes.append("mcp")
         tool_prefixes.append("data_profile")
+        tool_prefixes.append("ai_interface")
+        tool_prefixes.append("personalization")
+        tool_prefixes.append("ai_marketing")
+        tool_prefixes.append("strategy")
+        tool_prefixes.append("synthetic_test")
         tool_prefixes.append("readiness")
         tool_prefixes.append("governance")
         tool_prefixes.append("agent")
@@ -656,6 +669,30 @@ class AgentApp:
             path = step[len("data_profile "):].strip()
             report = profile_tabular(path)
             self.log_line(report)
+            return
+
+        if lowered.startswith("ai_interface"):
+            self.log_line(interface_checklist())
+            return
+
+        if lowered.startswith("personalization"):
+            self.log_line(personalization_checklist())
+            return
+
+        if lowered.startswith("ai_marketing"):
+            self.log_line(ai_marketing_checklist())
+            return
+
+        if lowered.startswith("strategy"):
+            self.log_line(strategic_planning_checklist())
+            return
+
+        if lowered.startswith("synthetic_test "):
+            scenario = step[len("synthetic_test "):].strip()
+            personas = default_personas()
+            prompt = synthetic_test_prompt(scenario, personas)
+            output = self._agent_chat(prompt)
+            self.log_line(output or "Agent task completed")
             return
 
         if lowered.startswith("team "):
