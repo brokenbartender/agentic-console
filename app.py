@@ -229,6 +229,7 @@ class AgentApp:
         tool_prefixes.append("ocr")
         tool_prefixes.append("a2a")
         tool_prefixes.append("mcp")
+        tool_prefixes.append("readiness")
         tool_prefixes.append("agent")
         self.planner = PlannerAgent([f"{p} " for p in tool_prefixes])
 
@@ -337,45 +338,64 @@ class AgentApp:
         if len(self.log_buffer) > 500:
             self.log_buffer = self.log_buffer[-500:]
 
-    def get_recent_logs(self, count=20):
 
+    def _readiness_report(self) -> str:
+        stats = self.rag.stats()
+        purpose = getattr(self, "purpose", "")
+        governance = []
+        if not purpose:
+            governance.append("Set a purpose (purpose <text>)")
+        if self.settings.allowed_paths:
+            governance.append("Path allowlist set")
+        else:
+            governance.append("Set AGENTIC_ALLOWED_PATHS")
+        if self.settings.allowed_domains:
+            governance.append("Domain allowlist set")
+        else:
+            governance.append("Set AGENTIC_ALLOWED_DOMAINS")
+        governance.append(f"Redaction: {self.settings.redact_logs}")
+        data_lines = [f"RAG chunks: {stats['chunks']}", f"RAG sources: {stats['sources']}"]
+        if stats['chunks'] == 0:
+            data_lines.append("Index documents with: index <path>")
+        tech = []
+        has_openai = bool(os.getenv("OPENAI_API_KEY"))
+        has_ollama = bool(os.getenv("OLLAMA_MODEL") or self.settings.ollama_model)
+        tech.append(f"OpenAI key: {'yes' if has_openai else 'no'}")
+        tech.append(f"Ollama model: {'yes' if has_ollama else 'no'}")
+        tech.append(f"Web UI: http://{self.settings.server_host}:{self.settings.server_port}")
+        culture = ["Use team <task> for cross-role review", "Adopt change-management playbooks"]
+        lines = ["AI Readiness Snapshot", "", "Strategy & Governance:"]
+        lines.extend([f"- {g}" for g in governance])
+        lines.append("")
+        lines.append("Data Foundations:")
+        lines.extend([f"- {d}" for d in data_lines])
+        lines.append("")
+        lines.append("Technology & Tools:")
+        lines.extend([f"- {t}" for t in tech])
+        lines.append("")
+        lines.append("Talent & Culture:")
+        lines.extend([f"- {c}" for c in culture])
+        return "\n".join(lines)
+
+    def get_recent_logs(self, count=20):
         return "\n".join(self.log_buffer[-count:])
 
-
-
     def _add_message(self, role, text):
-
         self.chat_history.append({"role": role, "content": text})
-
         max_turns = self.settings.max_chat_turns
-
         if len(self.chat_history) > max_turns * 2:
-
             self._summarize_history()
-
         self._save_memory()
 
-
-
     def _summarize_history(self):
-
         if not self.chat_history:
-
             return
-
         summary = " ".join(m["content"] for m in self.chat_history[-10:])
-
         summary = summary[:800]
-
         self.memory.set("chat_summary", summary)
-
         if self.settings.auto_summarize.lower() == "true":
-
             self.memory.add_memory("summary", summary, ttl_seconds=self.settings.long_memory_ttl)
-
         self.chat_history = self.chat_history[-10:]
-
-
 
     def _load_memory(self):
 
@@ -845,6 +865,10 @@ class AgentApp:
                     self.purpose = value
                     self.memory.set("purpose", value)
                     self.log_line("Purpose set.")
+                return
+
+            if lowered == "readiness":
+                self.log_line(self._readiness_report())
                 return
 
             if lowered == "jobs":

@@ -7,6 +7,27 @@ from typing import List
 from memory import _embed_text, _cosine
 
 
+def _read_pdf_text(path: str, max_pages: int = 30) -> str:
+    try:
+        from pypdf import PdfReader
+    except Exception:
+        return ""
+    try:
+        reader = PdfReader(path)
+    except Exception:
+        return ""
+    parts = []
+    pages = reader.pages[:max_pages]
+    for page in pages:
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            text = ""
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
+
+
 class RagStore:
     def __init__(self, memory) -> None:
         self.memory = memory
@@ -37,8 +58,21 @@ class RagStore:
         return cur.lastrowid
 
     def index_file(self, path: str) -> int:
-        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-            text = handle.read()
+        text = ""
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".pdf":
+            text = _read_pdf_text(path)
+            if not text:
+                try:
+                    from multimodal import ocr_pdf
+                    text = ocr_pdf(path, pages=2)
+                except Exception:
+                    text = ""
+        else:
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                text = handle.read()
+        if not text:
+            raise RuntimeError("No text extracted for indexing.")
         # chunking for provenance and retrieval quality
         chunk_size = 1000
         count = 0
@@ -48,6 +82,12 @@ class RagStore:
                 self.index_text(os.path.basename(path), chunk)
                 count += 1
         return count
+
+    def stats(self) -> dict:
+        cur = self.memory._conn.cursor()
+        cur.execute("SELECT COUNT(*), COUNT(DISTINCT source) FROM rag_chunks")
+        total, sources = cur.fetchone()
+        return {"chunks": total or 0, "sources": sources or 0}
 
     def search(self, query: str, limit: int = 5) -> List[dict]:
         qvec = _embed_text(query, self.memory.embedding_dim)

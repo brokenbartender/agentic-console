@@ -13,6 +13,7 @@ Local native agentic assistant with a Tkinter UI and web UI.
 - RAG indexing + evidence retrieval
 - Deep Research workflow with reflection
 - Multimodal OCR hook (optional)
+- PDF indexing via `pypdf` (optional) with OCR fallback
 - Purpose tagging + audit trail metadata
 - Optional path/domain allowlists for tool actions
 - Log redaction + event retention controls
@@ -23,6 +24,12 @@ python app.py
 ```
 Web UI: `http://127.0.0.1:8333`
 
+## Optional Dependencies
+```powershell
+python -m pip install pypdf
+python -m pip install pytesseract pillow pymupdf
+```
+
 ## Commands
 - `index <path>`: index a file or directory
 - `rag <query>`: answer with evidence + confidence
@@ -30,6 +37,7 @@ Web UI: `http://127.0.0.1:8333`
 - `ocr <pdf>`: quick OCR preview (requires tesseract)
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
 - `purpose <text>`: set a task purpose (used in audit logs)
+- `readiness`: show AI readiness snapshot
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
 - `jobs`: list recent jobs
 - `a2a <sender -> receiver | message>`: send agent-to-agent message

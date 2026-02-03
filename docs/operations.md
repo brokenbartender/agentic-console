@@ -19,6 +19,7 @@ This repo targets Windows-first delivery with CI and simple release artifacts.
 ## Monitoring
 - Local metrics: GET /api/metrics
 - Logs: data/agentic.log
+- Readiness snapshot: run `readiness` for a quick 4-pillar check
 
 ## Infrastructure
 - Keep .env local
