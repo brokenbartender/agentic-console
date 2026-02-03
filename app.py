@@ -85,6 +85,7 @@ from coding_trends import (
     agent_surfaces_summary,
 )
 from bdi_tools import agentic_pillars_summary, vertical_agent_templates
+from r2e_tools import write_r2e_index
 
 
 # Lazy imports for optional dependencies
@@ -323,6 +324,14 @@ class AgentApp:
         tool_prefixes.append("desires")
         tool_prefixes.append("intention")
         tool_prefixes.append("intentions")
+        tool_prefixes.append("action_space_add")
+        tool_prefixes.append("action_space_list")
+        tool_prefixes.append("action_space_remove")
+        tool_prefixes.append("checkpoint")
+        tool_prefixes.append("checkpoints")
+        tool_prefixes.append("rollback_note")
+        tool_prefixes.append("reflect")
+        tool_prefixes.append("r2e_index")
         tool_prefixes.append("lab_note")
         tool_prefixes.append("readiness")
         tool_prefixes.append("governance")
@@ -907,6 +916,16 @@ class AgentApp:
             self.log_line(vertical_agent_templates())
             return
 
+        if lowered.startswith("reflect "):
+            question = step[len("reflect "):].strip()
+            draft = self._agent_chat(f"Draft a concise answer: {question}")
+            critique = self._agent_chat(f"Critique this answer for gaps and errors:\n{draft}")
+            final = self._agent_chat(
+                f"Revise the answer using the critique.\nAnswer:\n{draft}\n\nCritique:\n{critique}"
+            )
+            self.log_line(final or "Agent task completed")
+            return
+
         if lowered.startswith("lab_note "):
             note = step[len("lab_note "):].strip()
             self.memory.add_memory("lab_note", note, ttl_seconds=self.settings.long_memory_ttl)
@@ -1304,6 +1323,61 @@ class AgentApp:
                 rows = self.memory.list_bdi("intention", 10)
                 out = "\n".join(f"{r['id']} {r['text']}" for r in rows) or "No intentions."
                 self.log_line(out)
+                return
+
+            if lowered.startswith("action_space_add "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                if "|" not in raw:
+                    self.log_line("action_space_add requires: action_space_add <name> | <description>")
+                    return
+                name, desc = [s.strip() for s in raw.split("|", 1)]
+                aid = self.memory.add_action_space(name, desc)
+                self.log_line(f"Action space saved: {aid}")
+                return
+
+            if lowered == "action_space_list":
+                rows = self.memory.list_action_space(50)
+                out = "\n".join(f"{r['name']}: {r['description']}" for r in rows) or "No action space."
+                self.log_line(out)
+                return
+
+            if lowered.startswith("action_space_remove "):
+                name = cmd.split(" ", 1)[1].strip()
+                self.memory.remove_action_space(name)
+                self.log_line("Action space removed.")
+                return
+
+            if lowered.startswith("checkpoint "):
+                label = cmd.split(" ", 1)[1].strip()
+                cid = self.memory.add_checkpoint(label)
+                self.log_line(f"Checkpoint saved: {cid}")
+                return
+
+            if lowered == "checkpoints":
+                rows = self.memory.list_checkpoints(10)
+                out = "\n".join(f"{r['id']} {r['label']}" for r in rows) or "No checkpoints."
+                self.log_line(out)
+                return
+
+            if lowered.startswith("rollback_note "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                parts = [s.strip() for s in raw.split("|", 1)]
+                if len(parts) < 2:
+                    self.log_line("rollback_note requires: rollback_note <checkpoint_id> | <notes>")
+                    return
+                try:
+                    cid = int(parts[0])
+                except Exception:
+                    self.log_line("rollback_note requires numeric id")
+                    return
+                self.memory.update_checkpoint(cid, parts[1])
+                self.log_line("Rollback note saved.")
+                return
+
+            if lowered.startswith("r2e_index "):
+                repo_path = cmd.split(" ", 1)[1].strip()
+                out_path = write_r2e_index(repo_path, "evals/r2e_index.tsv")
+                self.log_line(f"R2E index written: {out_path}")
                 return
 
             if lowered.startswith("long_run "):

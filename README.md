@@ -81,6 +81,14 @@ python -m pip install pyttsx3
 - `desires`: list desires
 - `intention <text>`: store an intention (BDI)
 - `intentions`: list intentions
+- `action_space_add <name> | <description>`: register tool/action space
+- `action_space_list`: list action space entries
+- `action_space_remove <name>`: remove action space entry
+- `checkpoint <label>`: record a safety checkpoint
+- `checkpoints`: list checkpoints
+- `rollback_note <id> | <notes>`: attach rollback notes
+- `reflect <question>`: run draft/critique/revise loop
+- `r2e_index <repo_path>`: scan repo functions for eval indexing
 - `lab_note <text>`: save a lab notebook note
 - `hypothesis <text>`: save a hypothesis
 - `hypotheses`: list hypotheses

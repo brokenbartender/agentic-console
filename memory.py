@@ -167,6 +167,26 @@ class MemoryStore:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS action_space (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                label TEXT NOT NULL,
+                notes TEXT
+            )
+            """
+        )
         self._conn.commit()
 
     def set(self, key: str, value: str) -> None:
@@ -383,6 +403,61 @@ class MemoryStore:
         return [
             {"id": rid, "timestamp": ts, "kind": k, "text": text, "owner": owner or ""}
             for (rid, ts, k, text, owner) in rows
+        ]
+
+    def add_action_space(self, name: str, description: str) -> int:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO action_space (timestamp, name, description) VALUES (?, ?, ?)",
+            (time.time(), name, description),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_action_space(self, limit: int = 50) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, name, description FROM action_space ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {"id": rid, "timestamp": ts, "name": name, "description": desc}
+            for (rid, ts, name, desc) in rows
+        ]
+
+    def remove_action_space(self, name: str) -> None:
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM action_space WHERE name=?", (name,))
+        self._conn.commit()
+
+    def add_checkpoint(self, label: str, notes: str | None = None) -> int:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO checkpoints (timestamp, label, notes) VALUES (?, ?, ?)",
+            (time.time(), label, notes or ""),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def update_checkpoint(self, checkpoint_id: int, notes: str) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "UPDATE checkpoints SET notes=? WHERE id=?",
+            (notes, checkpoint_id),
+        )
+        self._conn.commit()
+
+    def list_checkpoints(self, limit: int = 20) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, label, notes FROM checkpoints ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {"id": rid, "timestamp": ts, "label": label, "notes": notes or ""}
+            for (rid, ts, label, notes) in rows
         ]
 
     def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:
