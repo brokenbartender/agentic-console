@@ -6,3 +6,5 @@ dist/
 build/
 *.log
 .pytest_cache/
+tmp/
+AgenticConsole.spec

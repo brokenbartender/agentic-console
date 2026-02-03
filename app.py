@@ -46,6 +46,10 @@ from deep_research import DeepResearch
 
 from multimodal import ocr_pdf, capture_screenshot
 from audio_io import record_and_transcribe, speak_text
+from cognitive import slow_mode, dot_ensemble
+from graph_rag import GraphStore
+from workflows import run_workflow
+from perception import collect_observation
 
 from router import choose_model
 
@@ -272,10 +276,13 @@ class AgentApp:
         self.tools = ToolRegistry(self)
 
         self.rag = RagStore(self.memory)
+        self.graph = GraphStore(self.memory._conn)
         self.research = ResearchStore(self.memory._conn)
         self.jobs = JobStore(self.memory._conn)
         self.a2a = A2ABus(self.memory)
         self.mcp = MCPAdapter()
+        self.slow_mode = False
+        self.dot_mode = False
 
 
         tool_prefixes = list(self.tools.tools.keys())
@@ -343,6 +350,11 @@ class AgentApp:
         tool_prefixes.append("agent_surfaces")
         tool_prefixes.append("pillars")
         tool_prefixes.append("vertical_agents")
+        tool_prefixes.append("workflow")
+        tool_prefixes.append("slow_mode")
+        tool_prefixes.append("dot_mode")
+        tool_prefixes.append("graph_query")
+        tool_prefixes.append("perception")
         tool_prefixes.append("belief")
         tool_prefixes.append("beliefs")
         tool_prefixes.append("desire")
@@ -622,6 +634,13 @@ class AgentApp:
 
 
     def _agent_chat(self, instruction):
+        if getattr(self, "dot_mode", False):
+            return dot_ensemble(self._agent_chat_base, instruction)
+        if getattr(self, "slow_mode", False):
+            return slow_mode(self._agent_chat_base, instruction)
+        return self._agent_chat_base(instruction)
+
+    def _agent_chat_base(self, instruction):
 
         prefer_offline = getattr(self, "edge_mode", "auto") == "offline"
         model_name = _configure_agent(self.settings, instruction, prefer_offline=prefer_offline)
@@ -1185,6 +1204,64 @@ class AgentApp:
                 self.log_line("Spoken.")
             except Exception as exc:
                 self.log_line(f"Speak failed: {exc}")
+            return
+
+        if lowered.startswith("workflow "):
+            raw = step[len("workflow "):].strip()
+            if "|" not in raw:
+                self.log_line("workflow requires: workflow name | payload")
+                return
+            name, payload = [s.strip() for s in raw.split("|", 1)]
+            try:
+                output = run_workflow(name, payload)
+                self.log_line(output)
+            except Exception as exc:
+                self.log_line(f"workflow error: {exc}")
+            return
+
+        if lowered.startswith("slow_mode"):
+            parts = step.split(" ", 1)
+            value = parts[1].strip().lower() if len(parts) > 1 else ""
+            if value in ("on", "true", "1"):
+                self.slow_mode = True
+            elif value in ("off", "false", "0"):
+                self.slow_mode = False
+            else:
+                self.log_line("slow_mode requires: slow_mode on|off")
+                return
+            self.log_line(f"Slow mode {'enabled' if self.slow_mode else 'disabled'}.")
+            return
+
+        if lowered.startswith("dot_mode"):
+            parts = step.split(" ", 1)
+            value = parts[1].strip().lower() if len(parts) > 1 else ""
+            if value in ("on", "true", "1"):
+                self.dot_mode = True
+            elif value in ("off", "false", "0"):
+                self.dot_mode = False
+            else:
+                self.log_line("dot_mode requires: dot_mode on|off")
+                return
+            self.log_line(f"DoT mode {'enabled' if self.dot_mode else 'disabled'}.")
+            return
+
+        if lowered.startswith("graph_query "):
+            entity = step[len("graph_query "):].strip()
+            results = self.graph.neighbors(entity)
+            if not results:
+                self.log_line("No graph neighbors found.")
+                return
+            self.log_line(json.dumps(results))
+            return
+
+        if lowered.startswith("perception"):
+            parts = step.split(" ", 1)
+            path = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                observation = collect_observation(path if path else None)
+                self.log_line(json.dumps(observation))
+            except Exception as exc:
+                self.log_line(f"perception error: {exc}")
             return
 
 

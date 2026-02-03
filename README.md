@@ -44,9 +44,14 @@ python -m pip install pyttsx3
 - `screenshot <path>`: capture a desktop screenshot (requires pyautogui)
 - `listen [seconds]`: record audio and transcribe with Whisper (opt-in)
 - `speak <text>`: text-to-speech alert (requires pyttsx3)
+- `perception [path]`: capture a lightweight observation (optional screenshot)
 - `explain <query>`: show routing + memory/evidence hints
 - `telemetry`: show metrics snapshot
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
+- `workflow <name> | <payload>`: run a deterministic workflow
+- `slow_mode on|off`: enable deliberate System 2 pass
+- `dot_mode on|off`: enable diversity-of-thoughts drafting
+- `graph_query <entity>`: query GraphRAG neighbors for an entity
 - `assumption_add label | value | status | source`: save a market assumption
 - `assumption_list`: list market assumptions
 - `roadmap12 <niche>`: 12-week MVP roadmap
