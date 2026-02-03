@@ -55,6 +55,7 @@ from a2a import A2ABus
 from mcp_adapter import MCPAdapter
 from privacy import redact_text
 from cost import estimate_tokens, estimate_cost
+from data_quality import profile_tabular
 
 
 # Lazy imports for optional dependencies
@@ -230,7 +231,9 @@ class AgentApp:
         tool_prefixes.append("ocr")
         tool_prefixes.append("a2a")
         tool_prefixes.append("mcp")
+        tool_prefixes.append("data_profile")
         tool_prefixes.append("readiness")
+        tool_prefixes.append("governance")
         tool_prefixes.append("agent")
         self.planner = PlannerAgent([f"{p} " for p in tool_prefixes])
 
@@ -376,6 +379,28 @@ class AgentApp:
         lines.append("")
         lines.append("Talent & Culture:")
         lines.extend([f"- {c}" for c in culture])
+        return "\n".join(lines)
+
+    def _governance_checklist(self) -> str:
+        items = [
+            "Define AI purpose and success criteria",
+            "Treat AI like a new employee: onboarding, supervision, monitoring",
+            "Validate data quality and document known limitations",
+            "Complete legal/compliance approval gates before production",
+            "Establish human review for high-impact decisions",
+            "Monitor drift, errors, and user feedback",
+        ]
+        red_flags = [
+            "No documented purpose or owner",
+            "No approval/validation workflow",
+            "Unknown data lineage or quality",
+            "Unbounded tool access",
+        ]
+        lines = ["Governance Checklist", ""]
+        lines.extend([f"- {i}" for i in items])
+        lines.append("")
+        lines.append("Red Flags")
+        lines.extend([f"- {r}" for r in red_flags])
         return "\n".join(lines)
 
     def get_recent_logs(self, count=20):
@@ -626,6 +651,12 @@ class AgentApp:
             return
 
 
+
+        if lowered.startswith("data_profile "):
+            path = step[len("data_profile "):].strip()
+            report = profile_tabular(path)
+            self.log_line(report)
+            return
 
         if lowered.startswith("team "):
             task = step[len("team "):].strip()
@@ -903,6 +934,10 @@ class AgentApp:
                     rating = 0
                 self.memory.add_feedback(rating, notes)
                 self.log_line("Feedback recorded.")
+                return
+
+            if lowered == "governance":
+                self.log_line(self._governance_checklist())
                 return
 
             if lowered == "readiness":

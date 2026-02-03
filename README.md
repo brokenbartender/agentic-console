@@ -38,6 +38,8 @@ python -m pip install pytesseract pillow pymupdf
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
 - `purpose <text>`: set a task purpose (used in audit logs)
 - `readiness`: show AI readiness snapshot
+- `governance`: show AI governance checklist + red flags
+- `data_profile <path>`: quick CSV/TSV missingness scan
 - `models`: show model run summary (latency/tokens/cost)
 - `feedback <rating> | <notes>`: log user feedback
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
