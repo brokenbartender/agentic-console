@@ -102,6 +102,26 @@ class MemoryStore:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS incidents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                severity TEXT NOT NULL,
+                summary TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                name TEXT NOT NULL,
+                notes TEXT
+            )
+            """
+        )
         self._conn.commit()
 
     def set(self, key: str, value: str) -> None:
@@ -170,6 +190,48 @@ class MemoryStore:
             (time.time(), rating, notes or ""),
         )
         self._conn.commit()
+
+    def add_incident(self, severity: str, summary: str) -> int:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO incidents (timestamp, severity, summary) VALUES (?, ?, ?)",
+            (time.time(), severity, summary),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_incidents(self, limit: int = 20) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, severity, summary FROM incidents ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {"id": rid, "timestamp": ts, "severity": severity, "summary": summary}
+            for (rid, ts, severity, summary) in rows
+        ]
+
+    def add_evaluation(self, name: str, notes: str | None = None) -> int:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO evaluations (timestamp, name, notes) VALUES (?, ?, ?)",
+            (time.time(), name, notes or ""),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_evaluations(self, limit: int = 20) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, name, notes FROM evaluations ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {"id": rid, "timestamp": ts, "name": name, "notes": notes or ""}
+            for (rid, ts, name, notes) in rows
+        ]
 
     def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:
         cur = self._conn.cursor()

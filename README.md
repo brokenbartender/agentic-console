@@ -53,6 +53,12 @@ python -m pip install pytesseract pillow pymupdf
 - `experiment <title> | <plan>`: save an experiment plan
 - `experiments`: list experiments
 - `experiment_update <id> | <status> | <notes>`: update experiment status
+- `incident <severity> | <summary>`: log an incident
+- `incidents`: list recent incidents
+- `eval_run <name> | <notes>`: log an evaluation run
+- `evals`: list recent evaluations
+- `deployment_gate`: run deployment readiness gate
+- `red_team <scenario>`: generate red-team risks + mitigations
 - `mode <fast|rigorous>`: toggle analysis mode
 - `models`: show model run summary (latency/tokens/cost)
 - `feedback <rating> | <notes>`: log user feedback

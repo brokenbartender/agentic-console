@@ -252,6 +252,12 @@ class AgentApp:
         tool_prefixes.append("hypothesis")
         tool_prefixes.append("experiment")
         tool_prefixes.append("experiment_update")
+        tool_prefixes.append("incident")
+        tool_prefixes.append("incidents")
+        tool_prefixes.append("eval_run")
+        tool_prefixes.append("evals")
+        tool_prefixes.append("deployment_gate")
+        tool_prefixes.append("red_team")
         tool_prefixes.append("lab_note")
         tool_prefixes.append("readiness")
         tool_prefixes.append("governance")
@@ -402,6 +408,42 @@ class AgentApp:
         lines.append("Talent & Culture:")
         lines.extend([f"- {c}" for c in culture])
         return "\n".join(lines)
+
+    def _deployment_gate(self) -> str:
+        checks = []
+        ok = True
+        purpose = getattr(self, "purpose", "")
+        if purpose:
+            checks.append("Purpose set: ok")
+        else:
+            checks.append("Purpose set: missing")
+            ok = False
+        if self.settings.allowed_paths:
+            checks.append("Path allowlist: ok")
+        else:
+            checks.append("Path allowlist: missing")
+            ok = False
+        if self.settings.allowed_domains:
+            checks.append("Domain allowlist: ok")
+        else:
+            checks.append("Domain allowlist: missing")
+            ok = False
+        evals = self.memory.list_evaluations(5)
+        recent_eval = evals[0] if evals else None
+        if recent_eval:
+            checks.append("Recent eval: ok")
+        else:
+            checks.append("Recent eval: missing")
+            ok = False
+        incidents = self.memory.list_incidents(20)
+        critical = any(i["severity"].lower() in ("critical", "high") for i in incidents)
+        if critical:
+            checks.append("Critical incidents: present")
+            ok = False
+        else:
+            checks.append("Critical incidents: none")
+        status = "PASS" if ok else "FAIL"
+        return "Deployment Gate: " + status + "\n" + "\n".join(f"- {c}" for c in checks)
 
     def _governance_checklist(self) -> str:
         items = [
@@ -737,6 +779,18 @@ class AgentApp:
             self.log_line("Lab note saved.")
             return
 
+        if lowered.startswith("red_team "):
+            scenario = step[len("red_team "):].strip()
+            prompt = ("You are a red-team evaluator. Identify misuse risks, "
+                      "security weaknesses, and mitigations for: " + scenario)
+            output = self._agent_chat(prompt)
+            self.log_line(output or "Agent task completed")
+            return
+
+        if lowered == "deployment_gate":
+            self.log_line(self._deployment_gate())
+            return
+
         if lowered.startswith("team "):
             task = step[len("team "):].strip()
             roles = [
@@ -1058,6 +1112,40 @@ class AgentApp:
                     self.log_line("Experiment updated.")
                 else:
                     self.log_line("Research store unavailable")
+                return
+
+            if lowered.startswith("incident "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                if "|" not in raw:
+                    self.log_line("incident requires: incident <severity> | <summary>")
+                    return
+                severity, summary = [s.strip() for s in raw.split("|", 1)]
+                iid = self.memory.add_incident(severity, summary)
+                self.log_line(f"Incident logged: {iid}")
+                return
+
+            if lowered == "incidents":
+                rows = self.memory.list_incidents(10)
+                out = "\n".join(
+                    f"{r['id']} {r['severity']} {r['summary']}" for r in rows
+                ) or "No incidents."
+                self.log_line(out)
+                return
+
+            if lowered.startswith("eval_run "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                if "|" not in raw:
+                    self.log_line("eval_run requires: eval_run <name> | <notes>")
+                    return
+                name, notes = [s.strip() for s in raw.split("|", 1)]
+                eid = self.memory.add_evaluation(name, notes)
+                self.log_line(f"Eval logged: {eid}")
+                return
+
+            if lowered == "evals":
+                rows = self.memory.list_evaluations(10)
+                out = "\n".join(f"{r['id']} {r['name']}" for r in rows) or "No evals."
+                self.log_line(out)
                 return
 
             if lowered.startswith("purpose"):
