@@ -58,6 +58,8 @@ python -m pip install pyttsx3
 - `mcp_resources <provider>`: list MCP resources
 - `mcp_prompts <provider>`: list MCP prompts
 - `mcp_tools <provider>`: list MCP tools
+- `sandbox_run <code>`: run Python in a temp sandbox with timeout
+- `fishbowl`: show recent agent actions/events
 - `assumption_add label | value | status | source`: save a market assumption
 - `assumption_list`: list market assumptions
 - `roadmap12 <niche>`: 12-week MVP roadmap

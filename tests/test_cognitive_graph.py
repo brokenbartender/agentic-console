@@ -4,6 +4,7 @@ import unittest
 from cognitive import slow_mode, dot_ensemble
 from graph_rag import GraphStore
 from rag import RagStore
+from sandbox import run_python
 
 
 class CognitiveGraphTests(unittest.TestCase):
@@ -59,6 +60,11 @@ class CognitiveGraphTests(unittest.TestCase):
         graph.add_entity("Alpha", "concept")
         results = rag.hybrid_search("Alpha", graph, limit=3)
         self.assertTrue(len(results) >= 1)
+
+    def test_sandbox_run(self):
+        result = run_python("print('ok')")
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(result["stdout"], "ok")
 
 
 if __name__ == "__main__":

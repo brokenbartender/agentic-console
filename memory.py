@@ -212,6 +212,22 @@ class MemoryStore:
         )
         self._conn.commit()
 
+    def get_recent_events(self, limit: int = 20) -> List[Dict]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT timestamp, event_type, payload FROM events ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        events: List[Dict] = []
+        for ts, etype, payload in rows:
+            try:
+                payload_obj = json.loads(payload)
+            except Exception:
+                payload_obj = {"raw": payload}
+            events.append({"timestamp": ts, "type": etype, "payload": payload_obj})
+        return events
+
     def purge_events(self, retention_seconds: Optional[int]) -> None:
         if retention_seconds is None or retention_seconds <= 0:
             return

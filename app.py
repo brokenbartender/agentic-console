@@ -83,6 +83,7 @@ from micro_saas_tools import (
 )
 from research_store import ResearchStore
 from safety import screen_text
+from sandbox import run_python
 from automotive_agents import (
     ownership_companion_prompt,
     dealer_assist_prompt,
@@ -362,6 +363,8 @@ class AgentApp:
         tool_prefixes.append("hybrid_rag")
         tool_prefixes.append("graph_add")
         tool_prefixes.append("graph_edge")
+        tool_prefixes.append("sandbox_run")
+        tool_prefixes.append("fishbowl")
         tool_prefixes.append("belief")
         tool_prefixes.append("beliefs")
         tool_prefixes.append("desire")
@@ -1330,6 +1333,20 @@ class AgentApp:
             dst_id = self.graph.add_entity(dst, "concept")
             edge_id = self.graph.add_edge(src_id, rel, dst_id)
             self.log_line(f"Graph edge added: {edge_id}")
+            return
+
+        if lowered.startswith("sandbox_run "):
+            code = step[len("sandbox_run "):].strip()
+            try:
+                result = run_python(code)
+                self.log_line(json.dumps(result))
+            except Exception as exc:
+                self.log_line(f"sandbox_run error: {exc}")
+            return
+
+        if lowered == "fishbowl":
+            events = self.memory.get_recent_events(10)
+            self.log_line(json.dumps(events))
             return
 
         if lowered.startswith("perception"):

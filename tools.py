@@ -22,6 +22,9 @@ class ToolSpec:
     name: str
     risk: str
     confirm_required: bool = False
+    arg_hint: str = ""
+    min_parts: int = 0
+    splitter: str = ""
 
 
 @dataclass
@@ -50,17 +53,17 @@ class ToolRegistry:
             "undo": self._undo,
         }
         self.specs = {
-            "browse": ToolSpec("browse", "safe"),
-            "search": ToolSpec("search", "safe"),
-            "click": ToolSpec("click", "safe"),
-            "type": ToolSpec("type", "safe"),
-            "press": ToolSpec("press", "safe"),
-            "screenshot": ToolSpec("screenshot", "safe"),
-            "open": ToolSpec("open", "caution"),
-            "move": ToolSpec("move", "caution"),
-            "copy": ToolSpec("copy", "caution"),
-            "delete": ToolSpec("delete", "destructive", confirm_required=True),
-            "mkdir": ToolSpec("mkdir", "safe"),
+            "browse": ToolSpec("browse", "safe", arg_hint="browse <url>", min_parts=1),
+            "search": ToolSpec("search", "safe", arg_hint="search <query>", min_parts=1),
+            "click": ToolSpec("click", "safe", arg_hint="click <selector>", min_parts=1),
+            "type": ToolSpec("type", "safe", arg_hint="type <selector> | <text>", min_parts=2, splitter="|"),
+            "press": ToolSpec("press", "safe", arg_hint="press <key>", min_parts=1),
+            "screenshot": ToolSpec("screenshot", "safe", arg_hint="screenshot <path>", min_parts=1),
+            "open": ToolSpec("open", "caution", arg_hint="open <path>", min_parts=1),
+            "move": ToolSpec("move", "caution", arg_hint="move <src> | <dst>", min_parts=2, splitter="|"),
+            "copy": ToolSpec("copy", "caution", arg_hint="copy <src> | <dst>", min_parts=2, splitter="|"),
+            "delete": ToolSpec("delete", "destructive", confirm_required=True, arg_hint="delete <path>", min_parts=1),
+            "mkdir": ToolSpec("mkdir", "safe", arg_hint="mkdir <path>", min_parts=1),
             "undo": ToolSpec("undo", "caution"),
         }
 
@@ -69,6 +72,8 @@ class ToolRegistry:
             raise RuntimeError(f"Unknown tool: {name}")
         ctx = ctx or ToolContext()
         spec = self.specs.get(name)
+        if spec:
+            self._validate_args(spec, raw_args)
         if spec and spec.confirm_required and not ctx.confirm:
             raise ToolNeedsConfirmation(f"Tool '{name}' requires confirmation.")
         last_err = None
@@ -80,6 +85,21 @@ class ToolRegistry:
             except Exception as exc:
                 last_err = exc
         raise last_err
+
+    def _validate_args(self, spec: ToolSpec, raw_args: str) -> None:
+        if spec.min_parts <= 0:
+            return
+        raw = raw_args.strip()
+        if not raw:
+            raise RuntimeError(f"{spec.name} requires args. Expected: {spec.arg_hint}")
+        if spec.splitter:
+            parts = [p.strip() for p in raw.split(spec.splitter)]
+            if len(parts) < spec.min_parts or any(not p for p in parts[: spec.min_parts]):
+                raise RuntimeError(f"{spec.name} requires: {spec.arg_hint}")
+        else:
+            parts = raw.split()
+            if len(parts) < spec.min_parts:
+                raise RuntimeError(f"{spec.name} requires: {spec.arg_hint}")
 
     def _browse(self, raw):
         url = raw.strip()
