@@ -14,6 +14,11 @@ except Exception:
     Image = None
     BytesIO = None
 
+try:
+    import pyautogui
+except Exception:
+    pyautogui = None
+
 
 def ocr_pdf(path: str, pages: int = 2) -> str:
     if fitz is None or pytesseract is None or Image is None:
@@ -32,3 +37,11 @@ def ocr_pdf(path: str, pages: int = 2) -> str:
             text = pytesseract.image_to_string(img)
             parts.append(f"\n--- page {i+1} ---\n{text}")
     return "\n".join(parts)
+
+
+def capture_screenshot(path: str) -> str:
+    if pyautogui is None:
+        raise RuntimeError("pyautogui not installed")
+    image = pyautogui.screenshot()
+    image.save(path)
+    return path

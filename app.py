@@ -44,7 +44,8 @@ from calibration import confidence_from_evidence
 
 from deep_research import DeepResearch
 
-from multimodal import ocr_pdf
+from multimodal import ocr_pdf, capture_screenshot
+from audio_io import record_and_transcribe, speak_text
 
 from router import choose_model
 
@@ -269,6 +270,9 @@ class AgentApp:
         tool_prefixes.append("rag")
         tool_prefixes.append("deep_research")
         tool_prefixes.append("ocr")
+        tool_prefixes.append("screenshot")
+        tool_prefixes.append("listen")
+        tool_prefixes.append("speak")
         tool_prefixes.append("a2a")
         tool_prefixes.append("mcp")
         tool_prefixes.append("data_profile")
@@ -957,6 +961,42 @@ class AgentApp:
 
             self.log_line(text[:2000] if text else "No OCR text.")
 
+            return
+
+        if lowered.startswith("screenshot "):
+            path = step[len("screenshot "):].strip()
+            try:
+                saved = capture_screenshot(path)
+                self.log_line(f"Screenshot saved: {saved}")
+            except Exception as exc:
+                self.log_line(f"Screenshot failed: {exc}")
+            return
+
+        if lowered.startswith("listen"):
+            parts = step.split(" ", 1)
+            seconds = 5
+            if len(parts) > 1 and parts[1].strip():
+                try:
+                    seconds = int(parts[1].strip())
+                except Exception:
+                    seconds = 5
+            try:
+                text = record_and_transcribe(seconds=seconds)
+                self.log_line(text or "No speech detected.")
+            except Exception as exc:
+                self.log_line(f"Listen failed: {exc}")
+            return
+
+        if lowered.startswith("speak "):
+            text = step[len("speak "):].strip()
+            if not text:
+                self.log_line("speak requires text")
+                return
+            try:
+                speak_text(text)
+                self.log_line("Spoken.")
+            except Exception as exc:
+                self.log_line(f"Speak failed: {exc}")
             return
 
 

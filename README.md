@@ -28,6 +28,9 @@ Web UI: `http://127.0.0.1:8333`
 ```powershell
 python -m pip install pypdf
 python -m pip install pytesseract pillow pymupdf
+python -m pip install pyautogui
+python -m pip install openai-whisper sounddevice numpy
+python -m pip install pyttsx3
 ```
 
 ## Commands
@@ -35,6 +38,9 @@ python -m pip install pytesseract pillow pymupdf
 - `rag <query>`: answer with evidence + confidence
 - `deep_research <question>`: plan + reflect + answer
 - `ocr <pdf>`: quick OCR preview (requires tesseract)
+- `screenshot <path>`: capture a desktop screenshot (requires pyautogui)
+- `listen [seconds]`: record audio and transcribe with Whisper (opt-in)
+- `speak <text>`: text-to-speech alert (requires pyttsx3)
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
 - `purpose <text>`: set a task purpose (used in audit logs)
 - `readiness`: show AI readiness snapshot
@@ -87,7 +93,7 @@ python -m pip install pytesseract pillow pymupdf
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
 - `jobs`: list recent jobs
 - `a2a <sender -> receiver | message>`: send agent-to-agent message
-- `mcp <provider | json>`: call an MCP provider (stub)
+- `mcp <provider | json>`: call an MCP provider
 
 ## Environment
 Create a `.env` in the project root:
@@ -115,6 +121,10 @@ AGENTIC_ALLOWED_DOMAINS=example.com,openai.com
 AGENTIC_REDACT_LOGS=true
 AGENTIC_PURPOSE=General assistance
 AGENTIC_EVENT_RETENTION_SECONDS=2592000
+MCP_GITHUB_URL=http://localhost:9000/github
+MCP_DRIVE_URL=http://localhost:9000/drive
+GITHUB_TOKEN=...
+GOOGLE_DRIVE_TOKEN=...
 OPENAI_COST_INPUT_PER_1M=0
 OPENAI_COST_OUTPUT_PER_1M=0
 OLLAMA_COST_INPUT_PER_1M=0
