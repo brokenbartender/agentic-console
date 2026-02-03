@@ -53,17 +53,17 @@ class ToolRegistry:
             "undo": self._undo,
         }
         self.specs = {
-            "browse": ToolSpec("browse", "safe", arg_hint="browse <url>", min_parts=1),
-            "search": ToolSpec("search", "safe", arg_hint="search <query>", min_parts=1),
-            "click": ToolSpec("click", "safe", arg_hint="click <selector>", min_parts=1),
+            "browse": ToolSpec("browse", "safe", arg_hint="browse <url>", min_parts=1, splitter=" "),
+            "search": ToolSpec("search", "safe", arg_hint="search <query>", min_parts=1, splitter=" "),
+            "click": ToolSpec("click", "safe", arg_hint="click <selector>", min_parts=1, splitter=" "),
             "type": ToolSpec("type", "safe", arg_hint="type <selector> | <text>", min_parts=2, splitter="|"),
-            "press": ToolSpec("press", "safe", arg_hint="press <key>", min_parts=1),
-            "screenshot": ToolSpec("screenshot", "safe", arg_hint="screenshot <path>", min_parts=1),
-            "open": ToolSpec("open", "caution", arg_hint="open <path>", min_parts=1),
+            "press": ToolSpec("press", "safe", arg_hint="press <key>", min_parts=1, splitter=" "),
+            "screenshot": ToolSpec("screenshot", "safe", arg_hint="screenshot <path>", min_parts=1, splitter=" "),
+            "open": ToolSpec("open", "caution", arg_hint="open <path>", min_parts=1, splitter=" "),
             "move": ToolSpec("move", "caution", arg_hint="move <src> | <dst>", min_parts=2, splitter="|"),
             "copy": ToolSpec("copy", "caution", arg_hint="copy <src> | <dst>", min_parts=2, splitter="|"),
-            "delete": ToolSpec("delete", "destructive", confirm_required=True, arg_hint="delete <path>", min_parts=1),
-            "mkdir": ToolSpec("mkdir", "safe", arg_hint="mkdir <path>", min_parts=1),
+            "delete": ToolSpec("delete", "destructive", confirm_required=True, arg_hint="delete <path>", min_parts=1, splitter=" "),
+            "mkdir": ToolSpec("mkdir", "safe", arg_hint="mkdir <path>", min_parts=1, splitter=" "),
             "undo": ToolSpec("undo", "caution"),
         }
 

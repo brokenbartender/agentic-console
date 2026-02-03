@@ -393,6 +393,7 @@ class AgentApp:
         tool_prefixes.append("graph_edge")
         tool_prefixes.append("sandbox_run")
         tool_prefixes.append("fishbowl")
+        tool_prefixes.append("step_approval")
         tool_prefixes.append("belief")
         tool_prefixes.append("beliefs")
         tool_prefixes.append("desire")
@@ -433,8 +434,11 @@ class AgentApp:
         self.agent_profile = self.memory.get("agent_profile") or ""
         self.demo_mode = settings.demo_mode.lower() == "true"
         self.advanced_mode = False
+        self.step_approval_enabled = False
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
+        self.step_approval_event = threading.Event()
+        self.waiting_for_step = False
         self.current_run = None
         self.pending_runs = {}
 
@@ -485,14 +489,22 @@ class AgentApp:
         self.pause_btn = ttk.Button(input_row, text="Pause", command=self.toggle_pause)
         self.pause_btn.pack(side=tk.LEFT, padx=2)
 
+        step_btn = ttk.Button(input_row, text="Approve Step", command=self.approve_step)
+        step_btn.pack(side=tk.LEFT, padx=2)
+
         stop_btn = ttk.Button(input_row, text="Stop", command=self.stop_run)
         stop_btn.pack(side=tk.LEFT, padx=2)
 
         self.advanced_var = tk.BooleanVar(value=False)
+        self.step_approval_var = tk.BooleanVar(value=False)
         adv_toggle = ttk.Checkbutton(
             input_row, text="Advanced Mode", variable=self.advanced_var, command=self.toggle_advanced_mode
         )
         adv_toggle.pack(side=tk.LEFT, padx=6)
+        step_toggle = ttk.Checkbutton(
+            input_row, text="Step Approval", variable=self.step_approval_var, command=self.toggle_step_approval
+        )
+        step_toggle.pack(side=tk.LEFT, padx=6)
 
         main_pane = ttk.PanedWindow(top, orient=tk.HORIZONTAL)
         main_pane.pack(fill=tk.BOTH, expand=True, pady=6)
@@ -575,9 +587,15 @@ class AgentApp:
         self._update_mode_banner()
         self.log_line("Advanced mode enabled." if self.advanced_mode else "Demo mode enabled.")
 
+    def toggle_step_approval(self) -> None:
+        self.step_approval_enabled = bool(self.step_approval_var.get())
+        msg = "Step approvals enabled." if self.step_approval_enabled else "Step approvals disabled."
+        self.log_line(msg)
+
     def stop_run(self) -> None:
         self.stop_event.set()
         self.pause_event.clear()
+        self.step_approval_event.set()
         self._shutdown_browser()
         self.log_line("STOP requested. Halting after current step.")
 
@@ -592,6 +610,11 @@ class AgentApp:
             if hasattr(self, "pause_btn"):
                 self.pause_btn.configure(text="Resume")
             self.log_line("Pause requested. Will pause after current step.")
+
+    def approve_step(self) -> None:
+        self.step_approval_event.set()
+        self.waiting_for_step = False
+        self.log_line("Step approved.")
 
     def _set_plan_text(self, text: str) -> None:
         if not hasattr(self, "plan_text"):
@@ -652,6 +675,19 @@ class AgentApp:
                 self.browser.close()
             if self.playwright:
                 self.playwright.stop()
+        except Exception:
+            pass
+
+    def _capture_step_screenshot(self, step: PlanStep) -> None:
+        if not self.current_run or not self.current_run.screenshots_dir:
+            return
+        if not self.page:
+            return
+        safe_action = step.action.replace(" ", "_")
+        stamp = datetime.utcnow().strftime("%H%M%S")
+        target = os.path.join(self.current_run.screenshots_dir, f"step-{step.step}-{safe_action}-{stamp}.png")
+        try:
+            self.page.screenshot(path=target, full_page=True)
         except Exception:
             pass
 
@@ -821,6 +857,17 @@ class AgentApp:
         run.status = "running"
         self._start_proof_pack(run)
         for step in run.plan_steps:
+            if self.step_approval_enabled:
+                self.waiting_for_step = True
+                self.step_approval_event.clear()
+                self.log_line(f"Awaiting approval for step {step.step}.")
+                while not self.step_approval_event.is_set():
+                    time.sleep(0.2)
+                    if self.stop_event.is_set():
+                        run.status = "stopped"
+                        break
+                if run.status == "stopped":
+                    break
             if self.stop_event.is_set():
                 run.status = "stopped"
                 break
@@ -830,6 +877,7 @@ class AgentApp:
                 self._execute_step(step.command)
                 self._set_action_status(step.step, "done", datetime.utcnow().isoformat() + "Z")
                 self._record_action(step, "done")
+                self._capture_step_screenshot(step)
             except Exception as exc:
                 self._set_action_status(step.step, "failed", datetime.utcnow().isoformat() + "Z")
                 self._record_action(step, "failed", error=str(exc))
@@ -1723,6 +1771,20 @@ class AgentApp:
             self.log_line(json.dumps(events))
             return
 
+        if lowered.startswith("step_approval "):
+            value = step.split(" ", 1)[1].strip().lower() if " " in step else ""
+            if value in ("on", "true", "1"):
+                self.step_approval_enabled = True
+            elif value in ("off", "false", "0"):
+                self.step_approval_enabled = False
+            else:
+                self.log_line("step_approval requires: step_approval on|off")
+                return
+            if hasattr(self, "step_approval_var"):
+                self.step_approval_var.set(self.step_approval_enabled)
+            self.log_line("Step approvals enabled." if self.step_approval_enabled else "Step approvals disabled.")
+            return
+
         if lowered.startswith("perception"):
             parts = step.split(" ", 1)
             path = parts[1].strip() if len(parts) > 1 else ""
@@ -2563,6 +2625,7 @@ def _make_web_handler(app):
 
     <button onclick="sendCmd()">Plan</button>
     <button onclick="approve()">Approve & Run</button>
+    <button onclick="approveStep()">Approve Step</button>
 
     <pre id="plan"></pre>
     <pre id="out"></pre>
@@ -2606,6 +2669,12 @@ def _make_web_handler(app):
         await refreshMetrics();
       }
 
+      async function approveStep() {
+        const res = await fetch('/api/approve_step', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const data = await res.json();
+        document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+      }
+
       async function refreshMetrics() {
 
         const res = await fetch('/api/metrics');
@@ -2632,7 +2701,7 @@ def _make_web_handler(app):
 
         def do_POST(self):
 
-            if self.path not in ("/api/command", "/api/approve"):
+            if self.path not in ("/api/command", "/api/approve", "/api/approve_step"):
 
                 self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
 
@@ -2658,6 +2727,12 @@ def _make_web_handler(app):
                     app.current_run = run
                     app.task_queue.enqueue(lambda: app._run_task_run(run))
                     body = json.dumps({"status": "queued", "run_id": run_id}).encode("utf-8")
+                    self._send(HTTPStatus.OK, body, "application/json")
+                    return
+                if self.path == "/api/approve_step":
+                    app.step_approval_event.set()
+                    app.waiting_for_step = False
+                    body = json.dumps({"status": "approved"}).encode("utf-8")
                     self._send(HTTPStatus.OK, body, "application/json")
                     return
 
