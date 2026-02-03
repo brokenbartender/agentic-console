@@ -71,6 +71,12 @@ from automotive_agents import (
     mobile_work_prompt,
     audio_ai_checklist,
 )
+from agent_profiles import (
+    agent_types_summary,
+    default_persona_templates,
+    misalignment_checklist,
+    readiness_framework,
+)
 
 
 # Lazy imports for optional dependencies
@@ -282,6 +288,12 @@ class AgentApp:
         tool_prefixes.append("audio_ai")
         tool_prefixes.append("edge_mode")
         tool_prefixes.append("profile")
+        tool_prefixes.append("persona_add")
+        tool_prefixes.append("personas")
+        tool_prefixes.append("persona_templates")
+        tool_prefixes.append("agent_types")
+        tool_prefixes.append("misalignment_check")
+        tool_prefixes.append("readiness_framework")
         tool_prefixes.append("lab_note")
         tool_prefixes.append("readiness")
         tool_prefixes.append("governance")
@@ -826,6 +838,22 @@ class AgentApp:
             self.log_line(audio_ai_checklist())
             return
 
+        if lowered == "persona_templates":
+            self.log_line(default_persona_templates())
+            return
+
+        if lowered == "agent_types":
+            self.log_line(agent_types_summary())
+            return
+
+        if lowered == "misalignment_check":
+            self.log_line(misalignment_checklist())
+            return
+
+        if lowered == "readiness_framework":
+            self.log_line(readiness_framework())
+            return
+
         if lowered.startswith("lab_note "):
             note = step[len("lab_note "):].strip()
             self.memory.add_memory("lab_note", note, ttl_seconds=self.settings.long_memory_ttl)
@@ -1129,6 +1157,28 @@ class AgentApp:
             if lowered == "profile":
                 current = getattr(self, "agent_profile", "")
                 self.log_line(current or "No profile set.")
+                return
+
+            if lowered.startswith("persona_add "):
+                raw = cmd.split(" ", 1)[1] if " " in cmd else ""
+                parts = [s.strip() for s in raw.split("|", 2)]
+                if len(parts) < 2:
+                    self.log_line("persona_add requires: persona_add <name> | <role> | <constraints>")
+                    return
+                name = parts[0]
+                role = parts[1]
+                constraints = parts[2] if len(parts) > 2 else ""
+                pid = self.memory.add_persona(name, role, constraints, owner=self.purpose or "")
+                self.log_line(f"Persona saved: {pid}")
+                return
+
+            if lowered == "personas":
+                rows = self.memory.list_personas(10)
+                out = "\n".join(
+                    f"{r['id']} {r['name']} {r['role']}"
+                    for r in rows
+                ) or "No personas."
+                self.log_line(out)
                 return
 
             if lowered.startswith("hypothesis "):

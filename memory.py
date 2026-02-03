@@ -122,6 +122,18 @@ class MemoryStore:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS personas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                constraints TEXT,
+                owner TEXT
+            )
+            """
+        )
         self._conn.commit()
 
     def set(self, key: str, value: str) -> None:
@@ -231,6 +243,34 @@ class MemoryStore:
         return [
             {"id": rid, "timestamp": ts, "name": name, "notes": notes or ""}
             for (rid, ts, name, notes) in rows
+        ]
+
+    def add_persona(self, name: str, role: str, constraints: str | None = None, owner: str | None = None) -> int:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO personas (timestamp, name, role, constraints, owner) VALUES (?, ?, ?, ?, ?)",
+            (time.time(), name, role, constraints or "", owner or ""),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_personas(self, limit: int = 20) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, name, role, constraints, owner FROM personas ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "id": rid,
+                "timestamp": ts,
+                "name": name,
+                "role": role,
+                "constraints": constraints or "",
+                "owner": owner or "",
+            }
+            for (rid, ts, name, role, constraints, owner) in rows
         ]
 
     def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:

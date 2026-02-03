@@ -51,6 +51,12 @@ python -m pip install pytesseract pillow pymupdf
 - `dealer_assist <task>`: dealership workflow assistant
 - `mobile_work <task>`: voice-first mobile work helper
 - `audio_ai`: audio AI checklist
+- `persona_templates`: list persona templates
+- `persona_add <name> | <role> | <constraints>`: save persona definition
+- `personas`: list saved personas
+- `agent_types`: show AI agent types
+- `misalignment_check`: checklist for agent misalignment risks
+- `readiness_framework`: deployment readiness checklist
 - `lab_note <text>`: save a lab notebook note
 - `hypothesis <text>`: save a hypothesis
 - `hypotheses`: list hypotheses
