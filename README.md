@@ -38,6 +38,8 @@ python -m pip install pytesseract pillow pymupdf
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
 - `purpose <text>`: set a task purpose (used in audit logs)
 - `readiness`: show AI readiness snapshot
+- `models`: show model run summary (latency/tokens/cost)
+- `feedback <rating> | <notes>`: log user feedback
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
 - `jobs`: list recent jobs
 - `a2a <sender -> receiver | message>`: send agent-to-agent message
@@ -69,6 +71,10 @@ AGENTIC_ALLOWED_DOMAINS=example.com,openai.com
 AGENTIC_REDACT_LOGS=true
 AGENTIC_PURPOSE=General assistance
 AGENTIC_EVENT_RETENTION_SECONDS=2592000
+OPENAI_COST_INPUT_PER_1M=0
+OPENAI_COST_OUTPUT_PER_1M=0
+OLLAMA_COST_INPUT_PER_1M=0
+OLLAMA_COST_OUTPUT_PER_1M=0
 ```
 
 ## Endpoints
@@ -76,6 +82,7 @@ AGENTIC_EVENT_RETENTION_SECONDS=2592000
 - `GET /api/metrics` => JSON metrics
 - `GET /api/trace` => recent events
 - `GET /api/jobs` => recent jobs
+- `GET /api/models` => model run summary
 - `GET /api/a2a` => recent A2A messages
 - `POST /api/command` => send a command
 

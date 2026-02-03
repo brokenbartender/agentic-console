@@ -22,11 +22,17 @@ class FakeMemory:
     def log_event(self, _t, _p):
         return None
 
+    def log_model_run(self, *_a, **_k):
+        return None
+
     def add_memory(self, *a, **k):
         return None
 
     def search_memory(self, *a, **k):
         return []
+
+    def add_feedback(self, *_a, **_k):
+        return None
 
 
 class FakeJobs:
@@ -151,6 +157,10 @@ class AppCommandTests(unittest.TestCase):
             redact_logs="false",
             purpose="",
             event_retention_seconds=3600,
+            openai_cost_input_per_million=0,
+            openai_cost_output_per_million=0,
+            ollama_cost_input_per_million=0,
+            ollama_cost_output_per_million=0,
         )
         self.app.autonomy_level = "semi"
         self.app.memory = FakeMemory()

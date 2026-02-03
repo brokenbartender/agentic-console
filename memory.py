@@ -79,6 +79,29 @@ class MemoryStore:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                model TEXT NOT NULL,
+                tokens_in INTEGER NOT NULL,
+                tokens_out INTEGER NOT NULL,
+                cost REAL NOT NULL,
+                latency REAL NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                rating INTEGER NOT NULL,
+                notes TEXT
+            )
+            """
+        )
         self._conn.commit()
 
     def set(self, key: str, value: str) -> None:
@@ -110,6 +133,42 @@ class MemoryStore:
         cutoff = time.time() - retention_seconds
         cur = self._conn.cursor()
         cur.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
+        self._conn.commit()
+
+    def log_model_run(self, model: str, tokens_in: int, tokens_out: int, cost: float, latency: float) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO model_runs (timestamp, model, tokens_in, tokens_out, cost, latency) VALUES (?, ?, ?, ?, ?, ?)",
+            (time.time(), model, tokens_in, tokens_out, cost, latency),
+        )
+        self._conn.commit()
+
+    def model_summary(self, limit: int = 50) -> List[Dict[str, str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT model, COUNT(*), AVG(latency), SUM(tokens_in), SUM(tokens_out), SUM(cost) "
+            "FROM model_runs GROUP BY model ORDER BY COUNT(*) DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "model": model,
+                "runs": int(runs),
+                "avg_latency": float(avg_latency or 0),
+                "tokens_in": int(tokens_in or 0),
+                "tokens_out": int(tokens_out or 0),
+                "cost": float(cost or 0),
+            }
+            for (model, runs, avg_latency, tokens_in, tokens_out, cost) in rows
+        ]
+
+    def add_feedback(self, rating: int, notes: str | None = None) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO feedback (timestamp, rating, notes) VALUES (?, ?, ?)",
+            (time.time(), rating, notes or ""),
+        )
         self._conn.commit()
 
     def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:

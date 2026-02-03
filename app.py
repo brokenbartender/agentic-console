@@ -54,6 +54,7 @@ from team import TeamOrchestrator, AgentRole
 from a2a import A2ABus
 from mcp_adapter import MCPAdapter
 from privacy import redact_text
+from cost import estimate_tokens, estimate_cost
 
 
 # Lazy imports for optional dependencies
@@ -463,6 +464,7 @@ class AgentApp:
         logging.info("instruction: %s", self._maybe_redact(instruction))
 
         buf = io.StringIO()
+        start = time.time()
 
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
 
@@ -504,6 +506,26 @@ class AgentApp:
             self._add_message("assistant", output)
 
             self.memory.add_memory("short", f"ASSISTANT: {output}", ttl_seconds=self.settings.short_memory_ttl)
+
+        latency = time.time() - start
+        tokens_in = estimate_tokens(instruction)
+        tokens_out = estimate_tokens(output)
+        is_openai = bool(os.getenv("OPENAI_API_KEY")) and not oi_interpreter.offline
+        if is_openai:
+            cost = estimate_cost(
+                tokens_in,
+                tokens_out,
+                self.settings.openai_cost_input_per_million,
+                self.settings.openai_cost_output_per_million,
+            )
+        else:
+            cost = estimate_cost(
+                tokens_in,
+                tokens_out,
+                self.settings.ollama_cost_input_per_million,
+                self.settings.ollama_cost_output_per_million,
+            )
+        self.memory.log_model_run(model_name or "", tokens_in, tokens_out, cost, latency)
 
         return output
 
@@ -867,8 +889,38 @@ class AgentApp:
                     self.log_line("Purpose set.")
                 return
 
+            if lowered.startswith("feedback"):
+                raw = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+                rating = 0
+                notes = ""
+                if "|" in raw:
+                    left, notes = raw.split("|", 1)
+                    raw = left.strip()
+                    notes = notes.strip()
+                try:
+                    rating = int(raw) if raw else 0
+                except Exception:
+                    rating = 0
+                self.memory.add_feedback(rating, notes)
+                self.log_line("Feedback recorded.")
+                return
+
             if lowered == "readiness":
                 self.log_line(self._readiness_report())
+                return
+
+            if lowered == "models":
+                rows = self.memory.model_summary(10)
+                if not rows:
+                    self.log_line("No model runs yet.")
+                    return
+                lines = []
+                for row in rows:
+                    lines.append(
+                        f"{row['model']} runs={row['runs']} avg_latency={row['avg_latency']:.2f}s "
+                        f"tokens_in={row['tokens_in']} tokens_out={row['tokens_out']} cost=${row['cost']:.6f}"
+                    )
+                self.log_line("\n".join(lines))
                 return
 
             if lowered == "jobs":
@@ -998,6 +1050,10 @@ def _make_web_handler(app):
                 return
             if self.path == "/api/jobs":
                 body = json.dumps(app.jobs.list(20)).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/models":
+                body = json.dumps(app.memory.model_summary(20)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
             if self.path == "/api/a2a":
