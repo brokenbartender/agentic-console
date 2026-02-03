@@ -61,6 +61,8 @@ class Settings:
     openai_cost_output_per_million: float = float(_env("OPENAI_COST_OUTPUT_PER_1M", "0"))
     ollama_cost_input_per_million: float = float(_env("OLLAMA_COST_INPUT_PER_1M", "0"))
     ollama_cost_output_per_million: float = float(_env("OLLAMA_COST_OUTPUT_PER_1M", "0"))
+    max_plan_steps: int = int(_env("AGENTIC_MAX_PLAN_STEPS", "20"))
+    max_tool_calls_per_task: int = int(_env("AGENTIC_MAX_TOOL_CALLS", "50"))
 
 
 def get_settings() -> Settings:

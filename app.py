@@ -279,6 +279,11 @@ class AgentApp:
         tool_prefixes.append("mcp")
         tool_prefixes.append("data_profile")
         tool_prefixes.append("ai_interface")
+        tool_prefixes.append("rag_sources")
+        tool_prefixes.append("rag_rank")
+        tool_prefixes.append("simulate")
+        tool_prefixes.append("explain")
+        tool_prefixes.append("telemetry")
         tool_prefixes.append("personalization")
         tool_prefixes.append("ai_marketing")
         tool_prefixes.append("strategy")
@@ -465,6 +470,8 @@ class AgentApp:
         data_lines = [f"RAG chunks: {stats['chunks']}", f"RAG sources: {stats['sources']}"]
         if stats['chunks'] == 0:
             data_lines.append("Index documents with: index <path>")
+        data_lines.append("List RAG sources with: rag_sources")
+        data_lines.append("Rank RAG source with: rag_rank <source> <rank>")
         tech = []
         has_openai = bool(os.getenv("OPENAI_API_KEY"))
         has_ollama = bool(os.getenv("OLLAMA_MODEL") or self.settings.ollama_model)
@@ -472,6 +479,8 @@ class AgentApp:
         tech.append(f"Ollama model: {'yes' if has_ollama else 'no'}")
         tech.append(f"Edge mode: {getattr(self, 'edge_mode', 'auto')}")
         tech.append(f"Web UI: http://{self.settings.server_host}:{self.settings.server_port}")
+        tech.append("Explain routing with: explain <query>")
+        tech.append("Telemetry snapshot: telemetry")
         culture = ["Use team <task> for cross-role review", "Adopt change-management playbooks"]
         lines = ["AI Readiness Snapshot", "", "Strategy & Governance:"]
         lines.extend([f"- {g}" for g in governance])
@@ -710,6 +719,13 @@ class AgentApp:
 
         ctx = ToolContext(confirm=confirm, dry_run=dry_run)
 
+        if not hasattr(self, "_tool_calls_this_task"):
+            self._tool_calls_this_task = 0
+        max_calls = getattr(self.settings, "max_tool_calls_per_task", 0)
+        if max_calls and self._tool_calls_this_task >= max_calls:
+            self.metrics.inc("tool_budget_exceeded")
+            raise RuntimeError("Tool call budget exceeded for this task")
+        self._tool_calls_this_task += 1
         self.metrics.add_tool_call(name)
 
         self._log_event("tool", json.dumps({"name": name, "args": args}))
@@ -722,11 +738,72 @@ class AgentApp:
 
         return self.rag.search(query, limit=limit)
 
+    def _explain_query(self, query: str) -> str:
+        route = choose_model(query)
+        memory_hits = self.retriever.retrieve(query)
+        evidence = self._rag_search(query, limit=5)
+        tool_hint = None
+        lowered = query.lower().strip()
+        for name in self.tools.tools.keys():
+            if lowered.startswith(f"{name} "):
+                tool_hint = name
+                break
+        lines = [f"Model route: {route}"]
+        if tool_hint:
+            lines.append(f"Tool hint: {tool_hint}")
+        if memory_hits:
+            lines.append("Memory hits:")
+            lines.append(memory_hits)
+        if evidence:
+            lines.append("Top evidence:")
+            for item in evidence:
+                score = item.get("score", 0.0)
+                rank = item.get("source_rank", 0.0)
+                chunk = item.get("chunk_index")
+                lines.append(f"- {item.get('source')}#chunk{chunk} score={score:.3f} rank={rank:.2f}")
+        if not memory_hits and not evidence:
+            lines.append("No memory or evidence hits found.")
+        return "\n".join(lines)
+
 
 
     def _execute_step(self, step: str):
 
         lowered = step.strip().lower()
+
+        if lowered.startswith("simulate "):
+            payload = step[len("simulate "):].strip()
+            if not payload or " " not in payload:
+                raise RuntimeError("simulate requires: simulate <tool> <args>")
+            name, args = payload.split(" ", 1)
+            out = self._execute_tool(name.strip(), args.strip(), dry_run=True)
+            self.log_line(out)
+            return
+
+        if lowered == "rag_sources":
+            sources = self.rag.list_sources()
+            if not sources:
+                self.log_line("No RAG sources indexed.")
+                return
+            for item in sources:
+                source = item.get("source")
+                chunks = item.get("chunks")
+                avg_rank = item.get("avg_rank", 0.0)
+                self.log_line(f"{source}: chunks={chunks} rank={avg_rank:.2f}")
+            return
+
+        if lowered.startswith("rag_rank "):
+            parts = step.split(" ", 2)
+            if len(parts) < 3:
+                raise RuntimeError("rag_rank requires: rag_rank <source> <rank>")
+            source = parts[1].strip()
+            try:
+                rank = float(parts[2].strip())
+            except Exception:
+                raise RuntimeError("rag_rank requires a numeric rank")
+            updated = self.rag.set_source_rank(source, rank)
+            self.log_line(f"Updated {updated} chunks for {source} (rank={rank:.2f})")
+            return
 
         if lowered.startswith("index "):
 
@@ -1090,6 +1167,17 @@ class AgentApp:
         plan = self.planner.plan(instruction)
 
         if plan:
+            max_steps = getattr(self.settings, "max_plan_steps", 0)
+            if max_steps and len(plan) > max_steps:
+                self._log_event(
+                    "plan_guard",
+                    json.dumps({
+                        "limit": max_steps,
+                        "original_steps": len(plan),
+                    }),
+                )
+                plan = plan[:max_steps]
+                self.log_line(f"Plan truncated to {max_steps} steps due to budget.")
 
             self._log_event("plan", json.dumps({"steps": plan}))
 
@@ -1183,6 +1271,8 @@ class AgentApp:
 
             lowered = cmd.lower().strip()
 
+            self._tool_calls_this_task = 0
+
             if not hasattr(self, "purpose"):
                 self.purpose = ""
             if not hasattr(self, "redact_logs"):
@@ -1191,6 +1281,18 @@ class AgentApp:
             if "remember" in lowered or "note this" in lowered:
 
                 self.memory.add_memory("long", cmd, ttl_seconds=self.settings.long_memory_ttl)
+
+            if lowered == "telemetry":
+                snapshot = self.metrics.snapshot()
+                self.log_line(json.dumps(snapshot, indent=2))
+                return
+
+            if lowered.startswith("explain "):
+                query = cmd[len("explain "):].strip()
+                if not query:
+                    raise RuntimeError("explain requires a query")
+                self.log_line(self._explain_query(query))
+                return
 
 
 

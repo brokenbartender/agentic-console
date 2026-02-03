@@ -36,11 +36,16 @@ python -m pip install pyttsx3
 ## Commands
 - `index <path>`: index a file or directory
 - `rag <query>`: answer with evidence + confidence
+- `rag_sources`: list indexed sources + ranks
+- `rag_rank <source> <rank>`: set a source rank (0.0-2.0)
 - `deep_research <question>`: plan + reflect + answer
 - `ocr <pdf>`: quick OCR preview (requires tesseract)
+- `simulate <tool> <args>`: dry-run a tool call without side effects
 - `screenshot <path>`: capture a desktop screenshot (requires pyautogui)
 - `listen [seconds]`: record audio and transcribe with Whisper (opt-in)
 - `speak <text>`: text-to-speech alert (requires pyttsx3)
+- `explain <query>`: show routing + memory/evidence hints
+- `telemetry`: show metrics snapshot
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
 - `purpose <text>`: set a task purpose (used in audit logs)
 - `readiness`: show AI readiness snapshot
