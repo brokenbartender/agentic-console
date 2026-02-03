@@ -13,6 +13,9 @@ Local native agentic assistant with a Tkinter UI and web UI.
 - RAG indexing + evidence retrieval
 - Deep Research workflow with reflection
 - Multimodal OCR hook (optional)
+- Purpose tagging + audit trail metadata
+- Optional path/domain allowlists for tool actions
+- Log redaction + event retention controls
 
 ## Run
 ```powershell
@@ -26,6 +29,7 @@ Web UI: `http://127.0.0.1:8333`
 - `deep_research <question>`: plan + reflect + answer
 - `ocr <pdf>`: quick OCR preview (requires tesseract)
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
+- `purpose <text>`: set a task purpose (used in audit logs)
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
 - `jobs`: list recent jobs
 - `a2a <sender -> receiver | message>`: send agent-to-agent message
@@ -52,6 +56,11 @@ AGENTIC_SHORT_MEMORY_TTL=86400
 AGENTIC_LONG_MEMORY_TTL=2592000
 AGENTIC_AUTONOMY_LEVEL=semi
 AGENTIC_WEB_PORT=8333
+AGENTIC_ALLOWED_PATHS=C:\\Users\\codym\\Documents;C:\\Users\\codym\\Downloads
+AGENTIC_ALLOWED_DOMAINS=example.com,openai.com
+AGENTIC_REDACT_LOGS=true
+AGENTIC_PURPOSE=General assistance
+AGENTIC_EVENT_RETENTION_SECONDS=2592000
 ```
 
 ## Endpoints

@@ -146,6 +146,11 @@ class AppCommandTests(unittest.TestCase):
             short_memory_ttl=60,
             long_memory_ttl=3600,
             task_queue_size=10,
+            allowed_paths="",
+            allowed_domains="",
+            redact_logs="false",
+            purpose="",
+            event_retention_seconds=3600,
         )
         self.app.autonomy_level = "semi"
         self.app.memory = FakeMemory()

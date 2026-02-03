@@ -104,6 +104,14 @@ class MemoryStore:
         )
         self._conn.commit()
 
+    def purge_events(self, retention_seconds: Optional[int]) -> None:
+        if retention_seconds is None or retention_seconds <= 0:
+            return
+        cutoff = time.time() - retention_seconds
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
+        self._conn.commit()
+
     def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:
         cur = self._conn.cursor()
         cur.execute(

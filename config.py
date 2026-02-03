@@ -52,6 +52,11 @@ class Settings:
     autonomy_level: str = _env("AGENTIC_AUTONOMY_LEVEL", "semi")
     server_host: str = _env("AGENTIC_WEB_HOST", "127.0.0.1")
     server_port: int = int(_env("AGENTIC_WEB_PORT", "8333"))
+    allowed_paths: str = _env("AGENTIC_ALLOWED_PATHS", "")
+    allowed_domains: str = _env("AGENTIC_ALLOWED_DOMAINS", "")
+    redact_logs: str = _env("AGENTIC_REDACT_LOGS", "true")
+    purpose: str = _env("AGENTIC_PURPOSE", "")
+    event_retention_seconds: int = int(_env("AGENTIC_EVENT_RETENTION_SECONDS", "2592000"))
 
 
 def get_settings() -> Settings:

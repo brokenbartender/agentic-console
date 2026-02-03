@@ -5,6 +5,12 @@ import shutil
 import json
 from datetime import datetime
 from dataclasses import dataclass
+from privacy import (
+    parse_allowed_domains,
+    parse_allowed_paths,
+    is_domain_allowed,
+    is_path_allowed,
+)
 
 
 class ToolNeedsConfirmation(RuntimeError):
@@ -27,6 +33,8 @@ class ToolContext:
 class ToolRegistry:
     def __init__(self, app) -> None:
         self.app = app
+        self.allowed_paths = parse_allowed_paths(app.settings.allowed_paths)
+        self.allowed_domains = parse_allowed_domains(app.settings.allowed_domains)
         self.tools = {
             "browse": self._browse,
             "search": self._search,
@@ -79,6 +87,8 @@ class ToolRegistry:
             raise RuntimeError("browse requires a url")
         if not url.startswith("http"):
             url = "https://" + url
+        if not is_domain_allowed(url, self.allowed_domains):
+            raise RuntimeError("browse blocked by AGENTIC_ALLOWED_DOMAINS")
         self.app.ensure_browser()
         self.app.page.goto(url, wait_until="domcontentloaded")
         return f"Opened {url}"
@@ -87,6 +97,8 @@ class ToolRegistry:
         q = raw.strip()
         if not q:
             raise RuntimeError("search requires a query")
+        if not is_domain_allowed("https://www.google.com", self.allowed_domains):
+            raise RuntimeError("search blocked by AGENTIC_ALLOWED_DOMAINS")
         self.app.ensure_browser()
         self.app.page.goto("https://www.google.com", wait_until="domcontentloaded")
         self.app.page.locator("input[name='q']").fill(q)
@@ -123,6 +135,8 @@ class ToolRegistry:
         path = raw.strip()
         if not path:
             raise RuntimeError("screenshot requires a path")
+        if not is_path_allowed(path, self.allowed_paths):
+            raise RuntimeError("screenshot blocked by AGENTIC_ALLOWED_PATHS")
         self.app.ensure_browser()
         self.app.page.screenshot(path=path, full_page=True)
         return f"Saved screenshot {path}"
@@ -131,6 +145,8 @@ class ToolRegistry:
         path = raw.strip()
         if not path:
             raise RuntimeError("open requires a path")
+        if not is_path_allowed(path, self.allowed_paths):
+            raise RuntimeError("open blocked by AGENTIC_ALLOWED_PATHS")
         os.startfile(path)
         return f"Opened {path}"
 
@@ -140,6 +156,8 @@ class ToolRegistry:
             raise RuntimeError("move requires: move <src> | <dst>")
         src = parts[0].strip()
         dst = parts[1].strip()
+        if not is_path_allowed(src, self.allowed_paths) or not is_path_allowed(dst, self.allowed_paths):
+            raise RuntimeError("move blocked by AGENTIC_ALLOWED_PATHS")
         shutil.move(src, dst)
         if not os.path.exists(dst):
             raise RuntimeError("move verification failed")
@@ -151,6 +169,8 @@ class ToolRegistry:
             raise RuntimeError("copy requires: copy <src> | <dst>")
         src = parts[0].strip()
         dst = parts[1].strip()
+        if not is_path_allowed(src, self.allowed_paths) or not is_path_allowed(dst, self.allowed_paths):
+            raise RuntimeError("copy blocked by AGENTIC_ALLOWED_PATHS")
         if os.path.isdir(src):
             shutil.copytree(src, dst, dirs_exist_ok=True)
         else:
@@ -163,6 +183,8 @@ class ToolRegistry:
         path = raw.strip()
         if not path:
             raise RuntimeError("delete requires a path")
+        if not is_path_allowed(path, self.allowed_paths):
+            raise RuntimeError("delete blocked by AGENTIC_ALLOWED_PATHS")
         trash_dir = os.path.join(self.app.settings.data_dir, "trash")
         os.makedirs(trash_dir, exist_ok=True)
         base = os.path.basename(path.rstrip("\\/"))
@@ -176,6 +198,8 @@ class ToolRegistry:
         path = raw.strip()
         if not path:
             raise RuntimeError("mkdir requires a path")
+        if not is_path_allowed(path, self.allowed_paths):
+            raise RuntimeError("mkdir blocked by AGENTIC_ALLOWED_PATHS")
         os.makedirs(path, exist_ok=True)
         return f"Created {path}"
 
@@ -188,6 +212,8 @@ class ToolRegistry:
             src = payload.get("to")
             dst = payload.get("from")
             if src and dst:
+                if not is_path_allowed(dst, self.allowed_paths):
+                    return "Undo blocked by AGENTIC_ALLOWED_PATHS."
                 shutil.move(src, dst)
                 self.app.memory.set("last_trash", "")
                 return f"Restored {dst}"
