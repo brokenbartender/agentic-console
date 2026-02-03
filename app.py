@@ -65,6 +65,12 @@ from playbook_tools import (
     synthetic_test_prompt,
 )
 from research_store import ResearchStore
+from automotive_agents import (
+    ownership_companion_prompt,
+    dealer_assist_prompt,
+    mobile_work_prompt,
+    audio_ai_checklist,
+)
 
 
 # Lazy imports for optional dependencies
@@ -101,7 +107,7 @@ except Exception:
 
 
 
-def _configure_agent(settings, instruction: str = ""):
+def _configure_agent(settings, instruction: str = "", prefer_offline: bool = False):
     if oi_interpreter is None:
 
         raise RuntimeError(
@@ -140,7 +146,7 @@ def _configure_agent(settings, instruction: str = ""):
 
     openai_key = os.getenv("OPENAI_API_KEY")
 
-    if openai_key:
+    if openai_key and not prefer_offline:
         oi_interpreter.offline = False
 
         mode = choose_model(instruction)
@@ -172,6 +178,18 @@ def _configure_agent(settings, instruction: str = ""):
         oi_interpreter.llm.model = ollama_model
         oi_interpreter.llm.api_base = ollama_base
         return ollama_model
+
+    if openai_key:
+        oi_interpreter.offline = False
+        mode = choose_model(instruction)
+        if mode == "coding":
+            model = settings.openai_coding_model
+        elif mode == "reasoning":
+            model = settings.openai_reasoning_model
+        else:
+            model = settings.openai_model
+        oi_interpreter.llm.model = model
+        return model
 
 
     raise RuntimeError(
@@ -258,6 +276,12 @@ class AgentApp:
         tool_prefixes.append("evals")
         tool_prefixes.append("deployment_gate")
         tool_prefixes.append("red_team")
+        tool_prefixes.append("ownership_companion")
+        tool_prefixes.append("dealer_assist")
+        tool_prefixes.append("mobile_work")
+        tool_prefixes.append("audio_ai")
+        tool_prefixes.append("edge_mode")
+        tool_prefixes.append("profile")
         tool_prefixes.append("lab_note")
         tool_prefixes.append("readiness")
         tool_prefixes.append("governance")
@@ -280,6 +304,8 @@ class AgentApp:
         self.memory.purge_events(settings.event_retention_seconds)
 
         self.team = TeamOrchestrator(self._agent_chat)
+        self.edge_mode = self.memory.get("edge_mode") or "auto"
+        self.agent_profile = self.memory.get("agent_profile") or ""
 
 
 
@@ -394,6 +420,7 @@ class AgentApp:
         has_ollama = bool(os.getenv("OLLAMA_MODEL") or self.settings.ollama_model)
         tech.append(f"OpenAI key: {'yes' if has_openai else 'no'}")
         tech.append(f"Ollama model: {'yes' if has_ollama else 'no'}")
+        tech.append(f"Edge mode: {getattr(self, 'edge_mode', 'auto')}")
         tech.append(f"Web UI: http://{self.settings.server_host}:{self.settings.server_port}")
         culture = ["Use team <task> for cross-role review", "Adopt change-management playbooks"]
         lines = ["AI Readiness Snapshot", "", "Strategy & Governance:"]
@@ -517,7 +544,8 @@ class AgentApp:
 
     def _agent_chat(self, instruction):
 
-        model_name = _configure_agent(self.settings, instruction)
+        prefer_offline = getattr(self, "edge_mode", "auto") == "offline"
+        model_name = _configure_agent(self.settings, instruction, prefer_offline=prefer_offline)
 
         oi_interpreter.auto_run = True
 
@@ -541,6 +569,9 @@ class AgentApp:
             )
         if purpose:
             oi_interpreter.system_message += f" Current purpose: {purpose}."
+        profile = getattr(self, "agent_profile", "")
+        if profile:
+            oi_interpreter.system_message += f" Current profile: {profile}."
 
         context = self.retriever.retrieve(instruction)
 
@@ -771,6 +802,28 @@ class AgentApp:
                       "verification checks, and expected outputs for: " + question)
             answer = self._agent_chat(prompt)
             self.log_line(answer or "Agent task completed")
+            return
+
+        if lowered.startswith("ownership_companion "):
+            task = step[len("ownership_companion "):].strip()
+            output = self._agent_chat(ownership_companion_prompt(task))
+            self.log_line(output or "Agent task completed")
+            return
+
+        if lowered.startswith("dealer_assist "):
+            task = step[len("dealer_assist "):].strip()
+            output = self._agent_chat(dealer_assist_prompt(task))
+            self.log_line(output or "Agent task completed")
+            return
+
+        if lowered.startswith("mobile_work "):
+            task = step[len("mobile_work "):].strip()
+            output = self._agent_chat(mobile_work_prompt(task))
+            self.log_line(output or "Agent task completed")
+            return
+
+        if lowered == "audio_ai":
+            self.log_line(audio_ai_checklist())
             return
 
         if lowered.startswith("lab_note "):
@@ -1049,6 +1102,33 @@ class AgentApp:
                 self.analysis_mode = value
                 self.memory.set("analysis_mode", value)
                 self.log_line(f"Mode set to {value}")
+                return
+
+            if lowered.startswith("edge_mode "):
+                value = lowered.split(" ", 1)[1].strip()
+                if value not in ("offline", "online", "auto"):
+                    self.log_line("edge_mode must be offline, online, or auto")
+                    return
+                self.edge_mode = value
+                self.memory.set("edge_mode", value)
+                self.log_line(f"Edge mode set to {value}")
+                return
+
+            if lowered.startswith("profile "):
+                value = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
+                if value.lower() in ("", "clear", "none"):
+                    self.agent_profile = ""
+                    self.memory.set("agent_profile", "")
+                    self.log_line("Profile cleared.")
+                else:
+                    self.agent_profile = value
+                    self.memory.set("agent_profile", value)
+                    self.log_line("Profile set.")
+                return
+
+            if lowered == "profile":
+                current = getattr(self, "agent_profile", "")
+                self.log_line(current or "No profile set.")
                 return
 
             if lowered.startswith("hypothesis "):

@@ -47,6 +47,10 @@ python -m pip install pytesseract pillow pymupdf
 - `synthetic_test <scenario>`: synthetic user critique using personas
 - `lit_review <query>`: literature summary from indexed evidence
 - `analysis_plan <question>`: rigorous analysis plan template
+- `ownership_companion <task>`: ownership assistant workflow
+- `dealer_assist <task>`: dealership workflow assistant
+- `mobile_work <task>`: voice-first mobile work helper
+- `audio_ai`: audio AI checklist
 - `lab_note <text>`: save a lab notebook note
 - `hypothesis <text>`: save a hypothesis
 - `hypotheses`: list hypotheses
@@ -60,6 +64,8 @@ python -m pip install pytesseract pillow pymupdf
 - `deployment_gate`: run deployment readiness gate
 - `red_team <scenario>`: generate red-team risks + mitigations
 - `mode <fast|rigorous>`: toggle analysis mode
+- `edge_mode <offline|online|auto>`: force edge/offline or cloud routing
+- `profile <name>`: set a profile tag for the assistant
 - `models`: show model run summary (latency/tokens/cost)
 - `feedback <rating> | <notes>`: log user feedback
 - `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
