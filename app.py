@@ -1,5 +1,5 @@
 import os
-import shutil
+ 
 
 import threading
 
@@ -22,6 +22,9 @@ import io
 import contextlib
 
 import logging
+import hashlib
+import platform
+import sys
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
@@ -38,6 +41,8 @@ from metrics import Metrics
 from task_queue import TaskQueue
 
 from tools import ToolRegistry, ToolContext, ToolNeedsConfirmation
+from executor import files as exec_files
+from executor.execute import execute_tool
 
 from agents import PlannerAgent, RetrieverAgent, ExecutorAgent, VerifierAgent
 
@@ -62,6 +67,8 @@ from team import TeamOrchestrator, AgentRole
 from a2a import A2ABus
 from mcp_adapter import MCPAdapter
 from privacy import redact_text
+from core.logging_api import log_audit
+from core.schemas import ToolCall, TaskEvent, RunHeartbeat
 from cost import estimate_tokens, estimate_cost
 from data_quality import profile_tabular
 from playbook_tools import (
@@ -107,6 +114,7 @@ from coding_trends import (
 )
 from bdi_tools import agentic_pillars_summary, vertical_agent_templates
 from r2e_tools import write_r2e_index
+from orchestrator.state import OrchestratorState, validate_transition
 
 
 # Lazy imports for optional dependencies
@@ -428,11 +436,14 @@ class AgentApp:
         self.analysis_mode = self.memory.get("analysis_mode") or "fast"
         self.redact_logs = settings.redact_logs.lower() == "true"
         self.memory.purge_events(settings.event_retention_seconds)
+        self.memory.purge_audit_logs(settings.audit_retention_seconds)
+        self.memory.purge_debug_logs(settings.debug_retention_seconds)
 
         self.team = TeamOrchestrator(self._agent_chat)
         self.edge_mode = self.memory.get("edge_mode") or "auto"
         self.agent_profile = self.memory.get("agent_profile") or ""
         self.demo_mode = settings.demo_mode.lower() == "true"
+        self.replay_mode = str(getattr(settings, "replay_mode", "false")).lower() == "true"
         self.advanced_mode = False
         self.step_approval_enabled = False
         self.stop_event = threading.Event()
@@ -445,6 +456,7 @@ class AgentApp:
 
 
         self._build_ui()
+        self._load_last_run()
 
         self._load_memory()
 
@@ -543,21 +555,24 @@ class AgentApp:
         return text
 
     def _log_event(self, event_type: str, payload, extra: dict | None = None) -> None:
-        safe_payload = payload
-        if not isinstance(safe_payload, str):
-            try:
-                safe_payload = json.dumps(safe_payload)
-            except Exception:
-                safe_payload = str(safe_payload)
-        safe_payload = self._maybe_redact(safe_payload)
         data = {
-            "payload": safe_payload,
+            "payload": payload,
             "purpose": getattr(self, "purpose", "") or "",
             "autonomy": getattr(self, "autonomy_level", ""),
         }
         if extra:
             data.update(extra)
-        self.memory.log_event(event_type, json.dumps(data))
+        run_id = ""
+        if getattr(self, "current_run", None):
+            run_id = self.current_run.run_id
+        event = TaskEvent(
+            event_type=event_type,
+            run_id=run_id,
+            step_id=(extra or {}).get("step_id") if extra else None,
+            payload=data,
+            timestamp=time.time(),
+        )
+        log_audit(self.memory, "task_event", event.__dict__, redact=getattr(self, "redact_logs", False))
 
     def log_line(self, message):
         self.log.configure(state=tk.NORMAL)
@@ -597,6 +612,11 @@ class AgentApp:
         self.pause_event.clear()
         self.step_approval_event.set()
         self._shutdown_browser()
+        if self.current_run:
+            try:
+                self._set_run_status(self.current_run, OrchestratorState.STOPPED.value)
+            except Exception:
+                pass
         self.log_line("STOP requested. Halting after current step.")
 
     def toggle_pause(self) -> None:
@@ -604,11 +624,21 @@ class AgentApp:
             self.pause_event.clear()
             if hasattr(self, "pause_btn"):
                 self.pause_btn.configure(text="Pause")
+            if self.current_run and self.current_run.status == OrchestratorState.PAUSED.value:
+                try:
+                    self._set_run_status(self.current_run, OrchestratorState.RUNNING.value)
+                except Exception:
+                    pass
             self.log_line("Resumed.")
         else:
             self.pause_event.set()
             if hasattr(self, "pause_btn"):
                 self.pause_btn.configure(text="Resume")
+            if self.current_run and self.current_run.status == OrchestratorState.RUNNING.value:
+                try:
+                    self._set_run_status(self.current_run, OrchestratorState.PAUSED.value)
+                except Exception:
+                    pass
             self.log_line("Pause requested. Will pause after current step.")
 
     def approve_step(self) -> None:
@@ -782,25 +812,106 @@ class AgentApp:
         run_id = datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
         intent = self._build_intent(cmd)
         steps = self._build_plan(cmd)
+        plan_json = json.dumps(
+            [
+                {
+                    "step": s.step,
+                    "action": s.action,
+                    "target": s.target,
+                    "value": s.value,
+                    "reason": s.reason,
+                    "command": s.command,
+                }
+                for s in steps
+            ]
+        )
         run = TaskRun(
             run_id=run_id,
             intent=intent,
             plan_steps=steps,
             approved=False,
             mode="advanced" if self.advanced_mode else "demo",
-            status="planned",
+            status=OrchestratorState.PLANNED.value,
             created_at=datetime.utcnow().isoformat() + "Z",
             command=cmd,
         )
         self.pending_runs[run_id] = run
+        self.memory.create_task_run(
+            run_id=run.run_id,
+            status=run.status,
+            approved=run.approved,
+            command=run.command,
+            intent_json=json.dumps(run.intent),
+            plan_json=plan_json,
+        )
         return run
+
+    def _hydrate_task_run(self, payload: Dict) -> TaskRun:
+        intent = json.loads(payload.get("intent_json") or "{}")
+        plan_raw = json.loads(payload.get("plan_json") or "[]")
+        steps = []
+        for item in plan_raw:
+            try:
+                steps.append(
+                    PlanStep(
+                        step=item.get("step", 0),
+                        action=item.get("action", ""),
+                        target=item.get("target", ""),
+                        value=item.get("value", ""),
+                        reason=item.get("reason", ""),
+                        command=item.get("command", ""),
+                    )
+                )
+            except Exception:
+                continue
+        return TaskRun(
+            run_id=payload.get("run_id", ""),
+            intent=intent,
+            plan_steps=steps,
+            approved=bool(payload.get("approved")),
+            mode="advanced" if self.advanced_mode else "demo",
+            status=payload.get("status") or OrchestratorState.PLANNED.value,
+            created_at=payload.get("created_at") or "",
+            command=payload.get("command") or "",
+        )
+
+    def _load_last_run(self) -> None:
+        if not hasattr(self.memory, "get_latest_task_run"):
+            return
+        try:
+            payload = self.memory.get_latest_task_run()
+        except Exception:
+            return
+        if not payload:
+            return
+        try:
+            run = self._hydrate_task_run(payload)
+        except Exception:
+            return
+        self.current_run = run
+        self.pending_runs[run.run_id] = run
+        if run.plan_steps:
+            self._set_plan_text(self._format_plan(run.intent, run.plan_steps))
+            self._reset_action_cards(run.plan_steps)
+        if run.status in (OrchestratorState.PLANNED.value, OrchestratorState.APPROVED.value):
+            self.approve_btn.configure(state=tk.NORMAL)
+        else:
+            self.approve_btn.configure(state=tk.DISABLED)
+
+    def _set_run_status(self, run: TaskRun, status: str) -> None:
+        if run.status == status:
+            return
+        validate_transition(run.status, status)
+        run.status = status
+        self.memory.update_task_run(run.run_id, status=run.status)
 
     def approve_run(self) -> None:
         if not self.current_run:
             self.log_line("No plan to approve.")
             return
         self.current_run.approved = True
-        self.current_run.status = "approved"
+        self._set_run_status(self.current_run, OrchestratorState.APPROVED.value)
+        self.memory.update_task_run(self.current_run.run_id, approved=True)
         self.approve_btn.configure(state=tk.DISABLED)
         self.task_queue.enqueue(lambda: self._run_task_run(self.current_run))
 
@@ -813,7 +924,7 @@ class AgentApp:
     def cancel_plan(self) -> None:
         if not self.current_run:
             return
-        self.current_run.status = "cancelled"
+        self._set_run_status(self.current_run, OrchestratorState.STOPPED.value)
         self.current_run = None
         self._set_plan_text("")
         self._reset_action_cards([])
@@ -829,6 +940,7 @@ class AgentApp:
         run.actions_path = os.path.join(base, "actions.jsonl")
         run.extracted_path = os.path.join(base, "extracted.txt")
         self._log_event("run_start", {"run_id": run.run_id, "intent": run.intent})
+        self.memory.log_nondet_input(run.run_id, "time", datetime.utcnow().isoformat() + "Z")
 
     def _write_summary(self, run: TaskRun) -> None:
         summary_path = os.path.join(run.run_dir, "summary.md")
@@ -854,7 +966,9 @@ class AgentApp:
             return
         self.current_run = run
         self.stop_event.clear()
-        run.status = "running"
+        self._set_run_status(run, OrchestratorState.RUNNING.value)
+        hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time())
+        log_audit(self.memory, "run_heartbeat", hb.__dict__, redact=getattr(self, "redact_logs", False))
         self._start_proof_pack(run)
         for step in run.plan_steps:
             if self.step_approval_enabled:
@@ -864,12 +978,12 @@ class AgentApp:
                 while not self.step_approval_event.is_set():
                     time.sleep(0.2)
                     if self.stop_event.is_set():
-                        run.status = "stopped"
+                        self._set_run_status(run, OrchestratorState.STOPPED.value)
                         break
-                if run.status == "stopped":
+                if run.status == OrchestratorState.STOPPED.value:
                     break
             if self.stop_event.is_set():
-                run.status = "stopped"
+                self._set_run_status(run, OrchestratorState.STOPPED.value)
                 break
             self._set_action_status(step.step, "running", datetime.utcnow().isoformat() + "Z")
             self._record_action(step, "running")
@@ -881,15 +995,17 @@ class AgentApp:
             except Exception as exc:
                 self._set_action_status(step.step, "failed", datetime.utcnow().isoformat() + "Z")
                 self._record_action(step, "failed", error=str(exc))
-                run.status = "failed"
+                self._set_run_status(run, OrchestratorState.ERROR.value)
                 break
             while self.pause_event.is_set():
                 time.sleep(0.2)
                 if self.stop_event.is_set():
-                    run.status = "stopped"
+                    self._set_run_status(run, OrchestratorState.STOPPED.value)
                     break
-        if run.status == "running":
-            run.status = "done"
+        if run.status == OrchestratorState.RUNNING.value:
+            self._set_run_status(run, OrchestratorState.COMPLETE.value)
+        hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time())
+        log_audit(self.memory, "run_heartbeat", hb.__dict__, redact=getattr(self, "redact_logs", False))
         self._write_summary(run)
         self.log_line(f"Proof pack saved to: {run.run_dir}")
 
@@ -1058,7 +1174,20 @@ class AgentApp:
         if safety_hits:
             self.log_line(f"Safety screen flagged patterns: {', '.join(safety_hits)}")
 
-        oi_interpreter.auto_run = True
+        oi_mode = (getattr(self.settings, "oi_mode", "text_only") or "text_only").lower()
+        if oi_mode in ("disabled", "off", "false"):
+            raise RuntimeError("open-interpreter is disabled by AGENTIC_OI_MODE")
+        if oi_mode == "text_only":
+            oi_interpreter.auto_run = False
+            # Best-effort safety knobs if supported by open-interpreter.
+            for attr in ("safe_mode", "block_code", "deny_shell"):
+                if hasattr(oi_interpreter, attr):
+                    try:
+                        setattr(oi_interpreter, attr, True)
+                    except Exception:
+                        pass
+        else:
+            oi_interpreter.auto_run = True
 
         oi_interpreter.system_message = (
 
@@ -1071,6 +1200,11 @@ class AgentApp:
             "Always be concise and confirm destructive actions."
 
         )
+        if oi_mode == "text_only":
+            oi_interpreter.system_message += (
+                " IMPORTANT: Do NOT execute actions, run code, browse, or access files. "
+                "Respond with text-only guidance and proposed steps."
+            )
 
         purpose = getattr(self, "purpose", "")
         mode = getattr(self, "analysis_mode", "fast")
@@ -1096,6 +1230,12 @@ class AgentApp:
 
         extra = {"model": model_name or ""}
         self._log_event("instruction", instruction, extra)
+
+        if getattr(self, "current_run", None):
+            run_id = self.current_run.run_id
+            prompt_hash = hashlib.sha256((oi_interpreter.system_message + instruction).encode("utf-8")).hexdigest()
+            env_fp = f"{sys.platform}|{platform.python_version()}"
+            self.memory.log_run_context(run_id, model_name or "", prompt_hash, "tools@local", env_fp)
 
         logging.info("instruction: %s", self._maybe_redact(instruction))
 
@@ -1169,8 +1309,6 @@ class AgentApp:
 
     def _execute_tool(self, name: str, args: str, confirm: bool = False, dry_run: bool = False):
 
-        ctx = ToolContext(confirm=confirm, dry_run=dry_run)
-
         if not hasattr(self, "_tool_calls_this_task"):
             self._tool_calls_this_task = 0
         max_calls = getattr(self.settings, "max_tool_calls_per_task", 0)
@@ -1180,9 +1318,29 @@ class AgentApp:
         self._tool_calls_this_task += 1
         self.metrics.add_tool_call(name)
 
-        self._log_event("tool", json.dumps({"name": name, "args": args}))
-
-        return self.tools.execute(name, args, ctx)
+        run_id = self.current_run.run_id if getattr(self, "current_run", None) else ""
+        step_id = None
+        spec = self.tools.specs.get(name)
+        tool_call = ToolCall(
+            name=name,
+            args=args,
+            risk=spec.risk if spec else "unknown",
+            run_id=run_id,
+            step_id=step_id,
+            timestamp=time.time(),
+            dry_run=dry_run,
+        )
+        log_audit(self.memory, "tool_call", tool_call.__dict__, redact=getattr(self, "redact_logs", False))
+        if getattr(self, "replay_mode", False):
+            dry_run = True
+        return execute_tool(
+            self.tools,
+            name,
+            args,
+            self.settings.autonomy_level,
+            confirm=confirm,
+            dry_run=dry_run,
+        )
 
 
 
@@ -1619,7 +1777,7 @@ class AgentApp:
                     stamp = datetime.utcnow().strftime("%H%M%S")
                     target = os.path.join(self.current_run.screenshots_dir, f"{stamp}-desktop.png")
                     try:
-                        shutil.copy2(saved, target)
+                        exec_files.copy_path(saved, target)
                     except Exception:
                         pass
             except Exception as exc:

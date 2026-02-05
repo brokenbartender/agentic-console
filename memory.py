@@ -8,6 +8,7 @@ import math
 import hashlib
 import re
 from typing import Optional, List, Dict
+from privacy import redact_text, contains_sensitive
 
 
 def _tokenize(text: str) -> List[str]:
@@ -68,6 +69,28 @@ class MemoryStore:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                schema_version TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS debug_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                schema_version TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind TEXT NOT NULL,
@@ -75,7 +98,21 @@ class MemoryStore:
                 embedding TEXT NOT NULL,
                 created_at REAL NOT NULL,
                 expires_at REAL,
-                tags TEXT
+                tags TEXT,
+                scope TEXT DEFAULT 'shared',
+                status TEXT DEFAULT 'active',
+                quarantine_reason TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_refs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                memory_id INTEGER NOT NULL,
+                run_id TEXT,
+                step_id INTEGER,
+                tool_call_id TEXT
             )
             """
         )
@@ -187,6 +224,80 @@ class MemoryStore:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_runs (
+                run_id TEXT PRIMARY KEY,
+                created_at REAL NOT NULL,
+                status TEXT NOT NULL,
+                approved INTEGER NOT NULL,
+                command TEXT NOT NULL,
+                intent_json TEXT,
+                plan_json TEXT,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                run_id TEXT,
+                status TEXT NOT NULL,
+                metadata TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_context (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                model_id TEXT,
+                prompt_hash TEXT,
+                tool_versions TEXT,
+                env_fingerprint TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS nondet_inputs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT,
+                timestamp REAL NOT NULL,
+                source TEXT,
+                payload TEXT
+            )
+            """
+        )
+        self._conn.commit()
+        self._migrate_memories()
+        self._ensure_indexes()
+
+    def _migrate_memories(self) -> None:
+        cur = self._conn.cursor()
+        cur.execute("PRAGMA table_info(memories)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "scope" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT 'shared'")
+        if "status" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'")
+        if "quarantine_reason" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN quarantine_reason TEXT")
+        self._conn.commit()
+
+    def _ensure_indexes(self) -> None:
+        cur = self._conn.cursor()
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_exp ON memories(expires_at)")
+        try:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_rag_source ON rag_chunks(source)")
+        except sqlite3.OperationalError:
+            # rag_chunks table is created by RagStore; skip if it doesn't exist yet.
+            pass
         self._conn.commit()
 
     def set(self, key: str, value: str) -> None:
@@ -212,6 +323,22 @@ class MemoryStore:
         )
         self._conn.commit()
 
+    def log_audit(self, event_type: str, payload: str, schema_version: str = "v1") -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO audit_logs (timestamp, event_type, payload, schema_version) VALUES (?, ?, ?, ?)",
+            (time.time(), event_type, payload, schema_version),
+        )
+        self._conn.commit()
+
+    def log_debug(self, event_type: str, payload: str, schema_version: str = "v1") -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO debug_logs (timestamp, event_type, payload, schema_version) VALUES (?, ?, ?, ?)",
+            (time.time(), event_type, payload, schema_version),
+        )
+        self._conn.commit()
+
     def get_recent_events(self, limit: int = 20) -> List[Dict]:
         cur = self._conn.cursor()
         cur.execute(
@@ -234,6 +361,22 @@ class MemoryStore:
         cutoff = time.time() - retention_seconds
         cur = self._conn.cursor()
         cur.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
+        self._conn.commit()
+
+    def purge_audit_logs(self, retention_seconds: Optional[int]) -> None:
+        if retention_seconds is None or retention_seconds <= 0:
+            return
+        cutoff = time.time() - retention_seconds
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM audit_logs WHERE timestamp < ?", (cutoff,))
+        self._conn.commit()
+
+    def purge_debug_logs(self, retention_seconds: Optional[int]) -> None:
+        if retention_seconds is None or retention_seconds <= 0:
+            return
+        cutoff = time.time() - retention_seconds
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM debug_logs WHERE timestamp < ?", (cutoff,))
         self._conn.commit()
 
     def log_model_run(self, model: str, tokens_in: int, tokens_out: int, cost: float, latency: float) -> None:
@@ -400,6 +543,141 @@ class MemoryStore:
             for (rid, ts, rule, severity) in rows
         ]
 
+    def begin_transaction(self, run_id: str | None, metadata: str = "") -> int:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO transactions (created_at, run_id, status, metadata) VALUES (?, ?, ?, ?)",
+            (time.time(), run_id or "", "prepared", metadata),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def commit_transaction(self, tx_id: int) -> None:
+        cur = self._conn.cursor()
+        cur.execute("UPDATE transactions SET status=? WHERE id=?", ("committed", tx_id))
+        self._conn.commit()
+
+    def rollback_transaction(self, tx_id: int) -> None:
+        cur = self._conn.cursor()
+        cur.execute("UPDATE transactions SET status=? WHERE id=?", ("rolled_back", tx_id))
+        self._conn.commit()
+
+    def log_run_context(
+        self,
+        run_id: str,
+        model_id: str,
+        prompt_hash: str,
+        tool_versions: str,
+        env_fingerprint: str,
+    ) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO run_context (run_id, timestamp, model_id, prompt_hash, tool_versions, env_fingerprint) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (run_id, time.time(), model_id, prompt_hash, tool_versions, env_fingerprint),
+        )
+        self._conn.commit()
+
+    def log_nondet_input(self, run_id: str, source: str, payload: str) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO nondet_inputs (run_id, timestamp, source, payload) VALUES (?, ?, ?, ?)",
+            (run_id, time.time(), source, payload),
+        )
+        self._conn.commit()
+
+    def create_task_run(
+        self,
+        run_id: str,
+        status: str,
+        approved: bool,
+        command: str,
+        intent_json: str,
+        plan_json: str,
+    ) -> None:
+        cur = self._conn.cursor()
+        now = time.time()
+        cur.execute(
+            """
+            INSERT INTO task_runs (run_id, created_at, status, approved, command, intent_json, plan_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, now, status, int(approved), command, intent_json, plan_json, now),
+        )
+        self._conn.commit()
+
+    def update_task_run(
+        self,
+        run_id: str,
+        status: str | None = None,
+        approved: bool | None = None,
+        intent_json: str | None = None,
+        plan_json: str | None = None,
+    ) -> None:
+        cur = self._conn.cursor()
+        fields = []
+        values = []
+        if status is not None:
+            fields.append("status=?")
+            values.append(status)
+        if approved is not None:
+            fields.append("approved=?")
+            values.append(int(approved))
+        if intent_json is not None:
+            fields.append("intent_json=?")
+            values.append(intent_json)
+        if plan_json is not None:
+            fields.append("plan_json=?")
+            values.append(plan_json)
+        if not fields:
+            return
+        fields.append("updated_at=?")
+        values.append(time.time())
+        values.append(run_id)
+        cur.execute(f"UPDATE task_runs SET {', '.join(fields)} WHERE run_id=?", values)
+        self._conn.commit()
+
+    def get_task_run(self, run_id: str) -> Optional[Dict]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT run_id, created_at, status, approved, command, intent_json, plan_json, updated_at "
+            "FROM task_runs WHERE run_id=?",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "run_id": row[0],
+            "created_at": row[1],
+            "status": row[2],
+            "approved": bool(row[3]),
+            "command": row[4],
+            "intent_json": row[5] or "",
+            "plan_json": row[6] or "",
+            "updated_at": row[7],
+        }
+
+    def get_latest_task_run(self) -> Optional[Dict]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT run_id, created_at, status, approved, command, intent_json, plan_json, updated_at "
+            "FROM task_runs ORDER BY updated_at DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "run_id": row[0],
+            "created_at": row[1],
+            "status": row[2],
+            "approved": bool(row[3]),
+            "command": row[4],
+            "intent_json": row[5] or "",
+            "plan_json": row[6] or "",
+            "updated_at": row[7],
+        }
+
     def add_bdi(self, kind: str, text: str, owner: str | None = None) -> int:
         cur = self._conn.cursor()
         cur.execute(
@@ -488,22 +766,47 @@ class MemoryStore:
             for (ts, et, payload) in rows
         ]
 
-    def add_memory(self, kind: str, content: str, tags: Optional[List[str]] = None, ttl_seconds: Optional[int] = None) -> None:
+    def add_memory(
+        self,
+        kind: str,
+        content: str,
+        tags: Optional[List[str]] = None,
+        ttl_seconds: Optional[int] = None,
+        scope: str = "shared",
+        status: str = "active",
+        quarantine_reason: str | None = None,
+        run_id: str | None = None,
+        step_id: int | None = None,
+        tool_call_id: str | None = None,
+    ) -> None:
+        if contains_sensitive(content):
+            content = redact_text(content)
         expires_at = time.time() + ttl_seconds if ttl_seconds else None
         embedding = _embed_text(content, self.embedding_dim)
         payload = json.dumps(embedding)
         tags_blob = json.dumps(tags or [])
         cur = self._conn.cursor()
         cur.execute(
-            "INSERT INTO memories (kind, content, embedding, created_at, expires_at, tags) VALUES (?, ?, ?, ?, ?, ?)",
-            (kind, content, payload, time.time(), expires_at, tags_blob),
+            "INSERT INTO memories (kind, content, embedding, created_at, expires_at, tags, scope, status, quarantine_reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, content, payload, time.time(), expires_at, tags_blob, scope, status, quarantine_reason),
         )
+        memory_id = cur.lastrowid
+        if run_id or step_id or tool_call_id:
+            cur.execute(
+                "INSERT INTO memory_refs (memory_id, run_id, step_id, tool_call_id) VALUES (?, ?, ?, ?)",
+                (memory_id, run_id, step_id, tool_call_id),
+            )
         self._conn.commit()
 
     def purge_expired(self) -> None:
         cur = self._conn.cursor()
         cur.execute("DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?", (time.time(),))
         self._conn.commit()
+
+    def prune_memories(self) -> None:
+        # Phase 5: minimal pruning hook (TTL-based).
+        self.purge_expired()
 
     def search_memory(self, query: str, limit: int = 5) -> List[Dict[str, str]]:
         self.purge_expired()

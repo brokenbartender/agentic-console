@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import os
-import shutil
 import json
 from datetime import datetime
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from privacy import (
     is_domain_allowed,
     is_path_allowed,
 )
+from executor import files as exec_files
 
 
 class ToolNeedsConfirmation(RuntimeError):
@@ -31,6 +31,7 @@ class ToolSpec:
 class ToolContext:
     confirm: bool = False
     dry_run: bool = False
+    via_executor: bool = False
 
 
 class ToolRegistry:
@@ -71,6 +72,8 @@ class ToolRegistry:
         if name not in self.tools:
             raise RuntimeError(f"Unknown tool: {name}")
         ctx = ctx or ToolContext()
+        if not ctx.via_executor:
+            raise RuntimeError("Tool execution must go through executor.execute")
         spec = self.specs.get(name)
         if getattr(self.app, "demo_mode", False) and name in ("delete", "move"):
             raise RuntimeError("Blocked in DEMO MODE. Enable Advanced Mode to proceed.")
@@ -169,7 +172,7 @@ class ToolRegistry:
             raise RuntimeError("open requires a path")
         if not is_path_allowed(path, self.allowed_paths):
             raise RuntimeError("open blocked by AGENTIC_ALLOWED_PATHS")
-        os.startfile(path)
+        exec_files.open_path(path)
         return f"Opened {path}"
 
     def _move(self, raw):
@@ -180,9 +183,7 @@ class ToolRegistry:
         dst = parts[1].strip()
         if not is_path_allowed(src, self.allowed_paths) or not is_path_allowed(dst, self.allowed_paths):
             raise RuntimeError("move blocked by AGENTIC_ALLOWED_PATHS")
-        shutil.move(src, dst)
-        if not os.path.exists(dst):
-            raise RuntimeError("move verification failed")
+        exec_files.move_path(src, dst)
         return f"Moved {src} -> {dst}"
 
     def _copy(self, raw):
@@ -193,12 +194,7 @@ class ToolRegistry:
         dst = parts[1].strip()
         if not is_path_allowed(src, self.allowed_paths) or not is_path_allowed(dst, self.allowed_paths):
             raise RuntimeError("copy blocked by AGENTIC_ALLOWED_PATHS")
-        if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dst)
-        if not os.path.exists(dst):
-            raise RuntimeError("copy verification failed")
+        exec_files.copy_path(src, dst)
         return f"Copied {src} -> {dst}"
 
     def _delete(self, raw):
@@ -208,12 +204,8 @@ class ToolRegistry:
         if not is_path_allowed(path, self.allowed_paths):
             raise RuntimeError("delete blocked by AGENTIC_ALLOWED_PATHS")
         trash_dir = os.path.join(self.app.settings.data_dir, "trash")
-        os.makedirs(trash_dir, exist_ok=True)
-        base = os.path.basename(path.rstrip("\\/"))
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        target = os.path.join(trash_dir, f"{stamp}-{base}")
-        shutil.move(path, target)
-        self.app.memory.set("last_trash", json.dumps({"from": path, "to": target}))
+        src, target = exec_files.delete_to_trash(path, trash_dir)
+        self.app.memory.set("last_trash", json.dumps({"from": src, "to": target}))
         return f"Moved to trash: {path}"
 
     def _mkdir(self, raw):
@@ -222,7 +214,7 @@ class ToolRegistry:
             raise RuntimeError("mkdir requires a path")
         if not is_path_allowed(path, self.allowed_paths):
             raise RuntimeError("mkdir blocked by AGENTIC_ALLOWED_PATHS")
-        os.makedirs(path, exist_ok=True)
+        exec_files.mkdir_path(path)
         return f"Created {path}"
 
     def _undo(self, raw):
@@ -236,7 +228,7 @@ class ToolRegistry:
             if src and dst:
                 if not is_path_allowed(dst, self.allowed_paths):
                     return "Undo blocked by AGENTIC_ALLOWED_PATHS."
-                shutil.move(src, dst)
+                exec_files.restore_path(src, dst)
                 self.app.memory.set("last_trash", "")
                 return f"Restored {dst}"
         except Exception:

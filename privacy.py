@@ -71,3 +71,9 @@ def redact_text(text: str) -> str:
     redacted = _PHONE_RE.sub("[REDACTED_PHONE]", redacted)
     redacted = _OPENAI_KEY_RE.sub("[REDACTED_KEY]", redacted)
     return redacted
+
+
+def contains_sensitive(text: str) -> bool:
+    if not text:
+        return False
+    return bool(_EMAIL_RE.search(text) or _PHONE_RE.search(text) or _OPENAI_KEY_RE.search(text))

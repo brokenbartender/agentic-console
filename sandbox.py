@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import subprocess
+from executor.shell import run_subprocess
 import tempfile
 from typing import Dict, Any
 
@@ -14,16 +14,10 @@ def run_python(code: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
         raise RuntimeError("sandbox_run requires code")
     env = {"PYTHONIOENCODING": "utf-8"}
     with tempfile.TemporaryDirectory() as tmp:
-        proc = subprocess.run(
+        return run_subprocess(
             ["python", "-c", code],
             cwd=tmp,
             env=env,
-            capture_output=True,
-            text=True,
             timeout=timeout,
+            text=True,
         )
-        return {
-            "returncode": proc.returncode,
-            "stdout": proc.stdout.strip(),
-            "stderr": proc.stderr.strip(),
-        }

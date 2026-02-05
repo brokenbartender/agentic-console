@@ -22,6 +22,18 @@ class FakeMemory:
     def log_event(self, _t, _p):
         return None
 
+    def log_audit(self, *_a, **_k):
+        return None
+
+    def log_debug(self, *_a, **_k):
+        return None
+
+    def log_run_context(self, *_a, **_k):
+        return None
+
+    def get_latest_task_run(self):
+        return None
+
     def log_model_run(self, *_a, **_k):
         return None
 
@@ -161,6 +173,8 @@ class AppCommandTests(unittest.TestCase):
             openai_cost_output_per_million=0,
             ollama_cost_input_per_million=0,
             ollama_cost_output_per_million=0,
+            autonomy_level="semi",
+            oi_mode="text_only",
         )
         self.app.autonomy_level = "semi"
         self.app.memory = FakeMemory()
@@ -169,6 +183,7 @@ class AppCommandTests(unittest.TestCase):
         self.app.retriever = app_mod.RetrieverAgent(self.app.memory)
         self.app.jobs = FakeJobs()
         self.app.demo_mode = False
+        self.app.redact_logs = True
         self.app.current_run = app_mod.TaskRun(
             run_id="test",
             intent={"goal": "test", "source": "unit"},

@@ -4,7 +4,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from tools import ToolRegistry, ToolContext
+from tools import ToolRegistry
+from executor.execute import execute_tool
+from executor.shell import run_subprocess
 from config import get_settings
 from memory import MemoryStore
 from metrics import Metrics
@@ -55,7 +57,14 @@ def run():
                     prefix = f"{tool_name} "
                     if lowered.startswith(prefix):
                         args = instruction[len(prefix):].strip()
-                        output = tools.execute(tool_name, args, ToolContext(dry_run=True))
+                        output = execute_tool(
+                            tools,
+                            tool_name,
+                            args,
+                            app.settings.autonomy_level,
+                            confirm=False,
+                            dry_run=True,
+                        )
                         break
                 if not output:
                     output = "Agent task completed"
@@ -72,7 +81,7 @@ def run():
         raise SystemExit(1)
 
     # Tool selection eval
-    os.system("python evals/tool_eval.py")
+    run_subprocess(["python", "evals/tool_eval.py"], text=True)
 
 
 if __name__ == "__main__":
