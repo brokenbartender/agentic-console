@@ -48,13 +48,13 @@
 
 **Memory Schema, Retention, and Auditability**  
 1. SQLite schema includes `events`, `audit_logs`, `debug_logs`, `memories`, `memory_refs`, `task_runs`, `transactions`, `run_context`, `nondet_inputs`, `model_runs`, and more.  
-2. `memory_refs` exists but is **not wired** to actual tool/run/step usage yet.  
-3. Memory scope + quarantine columns exist in `memories` (`scope`, `status`, `quarantine_reason`).  
-4. TTL is supported via `expires_at`; `purge_events` is called for `events` only.  
+2. `memory_refs` is now **wired** when memory entries are created (run_id + step_id).  
+3. Memory scope + quarantine columns exist in `memories` (`scope`, `status`, `quarantine_reason`) and are validated on write.  
+4. TTL is supported via `expires_at`; a background prune loop now enforces expiry.  
 5. Audit logs are written via `core/logging_api.log_audit` with **redaction + sensitive‑data reject** at creation time.  
-6. Memory redaction is **not enforced** for memory entries (only logs).  
+6. Memory redaction is enforced at write time in `MemoryStore.add_memory` (sensitive content is redacted).  
 7. `run_context` and `nondet_inputs` are recorded; used for determinism traces.  
-8. No explicit indices are defined beyond SQLite defaults.  
+8. Explicit indexes exist for `events.timestamp`, `memories.expires_at`, and `rag_chunks.source`.  
 9. No conflict‑resolution logic exists beyond status fields.  
 10. Memory is local‑only; no remote store.  
 

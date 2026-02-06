@@ -46,6 +46,7 @@ class Settings:
     embedding_dim: int = int(_env("AGENTIC_EMBEDDING_DIM", "256"))
     short_memory_ttl: int = int(_env("AGENTIC_SHORT_MEMORY_TTL", "86400"))
     long_memory_ttl: int = int(_env("AGENTIC_LONG_MEMORY_TTL", "2592000"))
+    memory_prune_interval_seconds: int = int(_env("AGENTIC_MEMORY_PRUNE_INTERVAL_SECONDS", "3600"))
     max_chat_turns: int = int(_env("CHAT_HISTORY_TURNS", "20"))
     auto_summarize: str = _env("AGENTIC_AUTO_SUMMARIZE", "true")
     task_queue_size: int = int(_env("AGENTIC_TASK_QUEUE_SIZE", "100"))

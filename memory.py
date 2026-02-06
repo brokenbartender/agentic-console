@@ -45,6 +45,8 @@ class MemoryStore:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self.embedding_dim = embedding_dim
         self._init()
+        self._allowed_scopes = {"shared", "private"}
+        self._allowed_statuses = {"active", "quarantined", "deprecated"}
 
     def _init(self) -> None:
         cur = self._conn.cursor()
@@ -779,6 +781,10 @@ class MemoryStore:
         step_id: int | None = None,
         tool_call_id: str | None = None,
     ) -> None:
+        if scope not in self._allowed_scopes:
+            raise ValueError(f"Invalid memory scope: {scope}")
+        if status not in self._allowed_statuses:
+            raise ValueError(f"Invalid memory status: {status}")
         if contains_sensitive(content):
             content = redact_text(content)
         expires_at = time.time() + ttl_seconds if ttl_seconds else None
@@ -805,14 +811,31 @@ class MemoryStore:
         self._conn.commit()
 
     def prune_memories(self) -> None:
-        # Phase 5: minimal pruning hook (TTL-based).
+        # Phase 6: enforce TTL-based pruning for all expired memories.
         self.purge_expired()
 
-    def search_memory(self, query: str, limit: int = 5) -> List[Dict[str, str]]:
+    def search_memory(
+        self,
+        query: str,
+        limit: int = 5,
+        scope: str = "shared",
+        include_quarantined: bool = False,
+    ) -> List[Dict[str, str]]:
+        if scope not in self._allowed_scopes and scope != "all":
+            raise ValueError(f"Invalid memory scope: {scope}")
         self.purge_expired()
         qvec = _embed_text(query, self.embedding_dim)
         cur = self._conn.cursor()
-        cur.execute("SELECT kind, content, embedding, created_at, tags FROM memories")
+        clauses = []
+        params: list = []
+        if not include_quarantined:
+            clauses.append("status = ?")
+            params.append("active")
+        if scope != "all":
+            clauses.append("scope = ?")
+            params.append(scope)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        cur.execute(f"SELECT kind, content, embedding, created_at, tags FROM memories {where}", params)
         rows = cur.fetchall()
         scored = []
         for kind, content, emb_json, created_at, tags_blob in rows:

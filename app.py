@@ -321,6 +321,8 @@ class AgentApp:
         self.mcp = MCPAdapter()
         self.slow_mode = False
         self.dot_mode = False
+        self._memory_prune_stop = threading.Event()
+        self._start_memory_prune_loop()
 
 
         tool_prefixes = list(self.tools.tools.keys())
@@ -971,6 +973,7 @@ class AgentApp:
         log_audit(self.memory, "run_heartbeat", hb.__dict__, redact=getattr(self, "redact_logs", False))
         self._start_proof_pack(run)
         for step in run.plan_steps:
+            self._current_step_id = step.step
             if self.step_approval_enabled:
                 self.waiting_for_step = True
                 self.step_approval_event.clear()
@@ -997,6 +1000,8 @@ class AgentApp:
                 self._record_action(step, "failed", error=str(exc))
                 self._set_run_status(run, OrchestratorState.ERROR.value)
                 break
+            finally:
+                self._current_step_id = None
             while self.pause_event.is_set():
                 time.sleep(0.2)
                 if self.stop_event.is_set():
@@ -1128,7 +1133,14 @@ class AgentApp:
         summary = summary[:800]
         self.memory.set("chat_summary", summary)
         if self.settings.auto_summarize.lower() == "true":
-            self.memory.add_memory("summary", summary, ttl_seconds=self.settings.long_memory_ttl)
+            run_id, step_id = self._memory_context()
+            self.memory.add_memory(
+                "summary",
+                summary,
+                ttl_seconds=self.settings.long_memory_ttl,
+                run_id=run_id,
+                step_id=step_id,
+            )
         self.chat_history = self.chat_history[-10:]
 
     def _load_memory(self):
@@ -1156,6 +1168,32 @@ class AgentApp:
         except Exception:
 
             pass
+
+    def _memory_context(self) -> tuple[str | None, int | None]:
+        run_id = self.current_run.run_id if getattr(self, "current_run", None) else None
+        step_id = getattr(self, "_current_step_id", None)
+        return run_id, step_id
+
+    def _start_memory_prune_loop(self) -> None:
+        interval = getattr(self.settings, "memory_prune_interval_seconds", 0)
+        if interval <= 0:
+            return
+        try:
+            self.memory.prune_memories()
+        except Exception:
+            pass
+
+        def _loop() -> None:
+            while not self._memory_prune_stop.is_set():
+                try:
+                    self.memory.prune_memories()
+                except Exception:
+                    pass
+                self._memory_prune_stop.wait(interval)
+
+        t = threading.Thread(target=_loop, daemon=True)
+        t.start()
+        self._memory_prune_thread = t
 
 
 
@@ -1226,7 +1264,14 @@ class AgentApp:
 
         self._add_message("user", instruction)
 
-        self.memory.add_memory("short", f"USER: {instruction}", ttl_seconds=self.settings.short_memory_ttl)
+        run_id, step_id = self._memory_context()
+        self.memory.add_memory(
+            "short",
+            f"USER: {instruction}",
+            ttl_seconds=self.settings.short_memory_ttl,
+            run_id=run_id,
+            step_id=step_id,
+        )
 
         extra = {"model": model_name or ""}
         self._log_event("instruction", instruction, extra)
@@ -1281,7 +1326,14 @@ class AgentApp:
 
             self._add_message("assistant", output)
 
-            self.memory.add_memory("short", f"ASSISTANT: {output}", ttl_seconds=self.settings.short_memory_ttl)
+            run_id, step_id = self._memory_context()
+            self.memory.add_memory(
+                "short",
+                f"ASSISTANT: {output}",
+                ttl_seconds=self.settings.short_memory_ttl,
+                run_id=run_id,
+                step_id=step_id,
+            )
 
         latency = time.time() - start
         tokens_in = estimate_tokens(instruction)
@@ -1319,7 +1371,7 @@ class AgentApp:
         self.metrics.add_tool_call(name)
 
         run_id = self.current_run.run_id if getattr(self, "current_run", None) else ""
-        step_id = None
+        step_id = getattr(self, "_current_step_id", None)
         spec = self.tools.specs.get(name)
         tool_call = ToolCall(
             name=name,
@@ -1695,7 +1747,14 @@ class AgentApp:
 
         if lowered.startswith("lab_note "):
             note = step[len("lab_note "):].strip()
-            self.memory.add_memory("lab_note", note, ttl_seconds=self.settings.long_memory_ttl)
+            run_id, step_id = self._memory_context()
+            self.memory.add_memory(
+                "lab_note",
+                note,
+                ttl_seconds=self.settings.long_memory_ttl,
+                run_id=run_id,
+                step_id=step_id,
+            )
             self.log_line("Lab note saved.")
             return
 
@@ -2068,6 +2127,7 @@ class AgentApp:
 
         try:
 
+            self._memory_prune_stop.set()
             if self.page:
 
                 self.page.close()
@@ -2130,7 +2190,14 @@ class AgentApp:
 
             if "remember" in lowered or "note this" in lowered:
 
-                self.memory.add_memory("long", cmd, ttl_seconds=self.settings.long_memory_ttl)
+                run_id, step_id = self._memory_context()
+                self.memory.add_memory(
+                    "long",
+                    cmd,
+                    ttl_seconds=self.settings.long_memory_ttl,
+                    run_id=run_id,
+                    step_id=step_id,
+                )
 
             if lowered == "telemetry":
                 snapshot = self.metrics.snapshot()
