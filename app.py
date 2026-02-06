@@ -1630,6 +1630,22 @@ class AgentApp:
                 )
             except Exception:
                 pass
+            try:
+                skills_dir = os.path.join(self.settings.data_dir, "skills")
+                os.makedirs(skills_dir, exist_ok=True)
+                skill_text = "\n".join([s.command for s in run.plan_steps])
+                if "def " in skill_text or ".py" in skill_text or "code" in skill_text.lower():
+                    path = os.path.join(skills_dir, f"skill_{run.run_id}.txt")
+                    with open(path, "w", encoding="utf-8") as handle:
+                        handle.write(skill_text)
+                    self.memory.add_memory(
+                        kind="skill",
+                        content=skill_text[:2000],
+                        tags=["skill", "voyager"],
+                        scope="shared",
+                    )
+            except Exception:
+                pass
         self.log_line(f"Proof pack saved to: {run.run_dir}")
 
 
