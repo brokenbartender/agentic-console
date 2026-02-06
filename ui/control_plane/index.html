@@ -95,6 +95,50 @@
         grid-template-rows: auto 1fr auto;
       }
 
+      .layout {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        gap: 20px;
+      }
+
+      .sidebar {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 16px;
+        box-shadow: var(--shadow);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .sidebar h4 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .persona-list button {
+        width: 100%;
+        text-align: left;
+        margin-bottom: 8px;
+      }
+
+      .persona-list button.active {
+        background: var(--accent-3);
+        color: #fff;
+      }
+
+      .session {
+        padding: 8px;
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+
       .card {
         background: var(--card);
         border: 1px solid var(--line);
@@ -333,7 +377,18 @@
           <button class="secondary" onclick="toggleBrain()">Brain View</button>
         </div>
       </header>
-      <main>
+      <main class="layout">
+        <aside class="sidebar">
+          <div>
+            <h4>Agent Market</h4>
+            <div class="persona-list" id="persona-list"></div>
+          </div>
+          <div>
+            <h4>Sessions</h4>
+            <div id="session-list"></div>
+          </div>
+        </aside>
+        <div>
         <div class="card command">
           <h3>Command</h3>
           <textarea id="command" placeholder="Try: agent build a data ingestion plan"></textarea>
@@ -380,6 +435,7 @@
         <div class="card tools">
           <h3 style="grid-column:1/-1;">Tools</h3>
           <div id="tools" class="tools"></div>
+        </div>
         </div>
       </main>
     </div>
@@ -459,6 +515,37 @@
         const el = document.getElementById("tools");
         el.innerHTML = items.map((t) => {
           return `<div class="tool"><div><strong>${t.name}</strong></div><div class="risk">risk: ${t.risk || "n/a"}</div><div class="mono">${t.arg_hint || ""}</div></div>`;
+        }).join("");
+      }
+
+      function renderPersonaList() {
+        const personas = [
+          { id: "Coder", label: "Coder Agent" },
+          { id: "Researcher", label: "Research Agent" },
+          { id: "VLA", label: "VLA Agent" },
+          { id: "Reviewer", label: "Reviewer Agent" },
+          { id: "Legal", label: "Legal Agent" },
+        ];
+        const el = document.getElementById("persona-list");
+        const current = document.getElementById("persona").value || "";
+        el.innerHTML = personas.map((p) => {
+          const active = p.id === current ? "active" : "";
+          return `<button class="secondary ${active}" onclick="selectPersona('${p.id}')">${p.label}</button>`;
+        }).join("");
+      }
+
+      async function selectPersona(id) {
+        document.getElementById("persona").value = id;
+        await setPersona();
+        renderPersonaList();
+      }
+
+      function renderSessions(events) {
+        const el = document.getElementById("session-list");
+        const items = (events || []).slice(0, 6);
+        el.innerHTML = items.map((e) => {
+          const t = e.event_type || "event";
+          return `<div class="session"><strong>${t}</strong></div>`;
         }).join("");
       }
 
@@ -604,6 +691,7 @@
         const cockpit = await fetch("/api/cockpit").then((r) => r.json());
         renderEvents(cockpit.events || []);
         renderA2A(cockpit.a2a || []);
+        renderSessions(cockpit.events || []);
         const metrics = cockpit.metrics || {};
         document.getElementById("status-metrics").textContent = `Metrics: ${Object.keys(metrics).length}`;
         document.getElementById("status-events").textContent = `Events: ${cockpit.events ? cockpit.events.length : 0}`;
@@ -621,6 +709,7 @@
         }
         const graph = await fetch("/api/graph").then((r) => r.json());
         renderBrain(graph || {});
+        renderPersonaList();
 
         const artifact = extractArtifacts(cockpit.events || []);
         if (artifact) {
