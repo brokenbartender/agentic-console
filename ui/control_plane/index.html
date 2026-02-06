@@ -518,19 +518,25 @@
         }).join("");
       }
 
-      function renderPersonaList() {
-        const personas = [
-          { id: "Coder", label: "Coder Agent" },
-          { id: "Researcher", label: "Research Agent" },
-          { id: "VLA", label: "VLA Agent" },
-          { id: "Reviewer", label: "Reviewer Agent" },
-          { id: "Legal", label: "Legal Agent" },
-        ];
+      async function renderPersonaList() {
+        let personas = [];
+        try {
+          personas = await fetch("/api/roles").then((r) => r.json());
+        } catch {}
+        if (!personas.length) {
+          personas = [
+            { id: "Coder", label: "Coder Agent" },
+            { id: "Researcher", label: "Research Agent" },
+            { id: "VLA", label: "VLA Agent" },
+            { id: "Reviewer", label: "Reviewer Agent" },
+            { id: "Legal", label: "Legal Agent" },
+          ];
+        }
         const el = document.getElementById("persona-list");
         const current = document.getElementById("persona").value || "";
         el.innerHTML = personas.map((p) => {
           const active = p.id === current ? "active" : "";
-          return `<button class="secondary ${active}" onclick="selectPersona('${p.id}')">${p.label}</button>`;
+          return `<button class="secondary ${active}" onclick="selectPersona('${p.id}')">${p.label || p.id}</button>`;
         }).join("");
       }
 

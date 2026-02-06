@@ -3943,6 +3943,16 @@ def _make_web_handler(app):
                 body = json.dumps(sources).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
+            if self.path == "/api/roles":
+                roles = []
+                try:
+                    if hasattr(app.team, "roles"):
+                        roles = [{"id": r.name, "label": r.label} for r in app.team.roles]
+                except Exception:
+                    roles = []
+                body = json.dumps(roles).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
             if self.path == "/api/cockpit":
                 payload = {
                     "metrics": app.metrics.snapshot(),
