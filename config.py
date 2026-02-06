@@ -76,6 +76,8 @@ class Settings:
     a2a_peers: str = _env("AGENTIC_A2A_PEERS", "")
     node_name: str = _env("AGENTIC_NODE_NAME", "work")
     a2a_auto_reply: str = _env("AGENTIC_A2A_AUTO_REPLY", "false")
+    a2a_agent_mode: str = _env("AGENTIC_A2A_AGENT_MODE", "plan")
+    a2a_execute_enabled: str = _env("AGENTIC_A2A_EXECUTE", "false")
 
 
 def get_settings() -> Settings:

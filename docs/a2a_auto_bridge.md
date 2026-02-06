@@ -52,3 +52,16 @@ participate in a 3-way conversation.
 Auto-reply can be paused by writing:
 `data/a2a_bridge_pause.json` => `{ "paused": true }`.
 The UI controls this automatically.
+
+## Agent Mode (A2A Router)
+You can enable autonomous routing for inbound A2A messages using:
+```
+AGENTIC_A2A_AUTO_REPLY=true
+AGENTIC_A2A_AGENT_MODE=plan   # off|chat|plan|auto
+AGENTIC_A2A_EXECUTE=false
+```
+
+Message formats supported:
+- Plain text → handled per mode
+- `plan: <task>` or `task: <task>` → returns a plan
+- JSON: `{"type":"plan","text":"<task>"}` or `{"type":"chat","text":"<message>"}`  

@@ -923,23 +923,75 @@ class AgentApp:
             self._update_a2a_thread_summary(sender, receiver, message)
         except Exception:
             pass
-        if str(self.settings.a2a_auto_reply).lower() not in ("1", "true", "yes", "on"):
-            return
         if sender == getattr(self, "node_name", "work"):
             return
-        lowered = (message or "").lower()
-        if not any(token in lowered for token in ("ping", "proof", "hello", "test")):
+        if self._is_a2a_paused():
+            return
+        if str(self.settings.a2a_auto_reply).lower() not in ("1", "true", "yes", "on"):
+            return
+
+        mode = (getattr(self.settings, "a2a_agent_mode", "plan") or "plan").lower()
+        if mode in ("off", "disabled", "false"):
             return
         if sender not in self.a2a_net.peers:
             return
-        host = socket.gethostname()
-        now = datetime.now().isoformat()
-        reply = f"AUTO_REPLY: hostname={host} time={now}"
-        try:
-            self.a2a_net.send(sender, getattr(self, "node_name", "work"), "remote", reply)
-            self.log_line(f"A2A auto-reply sent to {sender}.")
-        except Exception as exc:
-            self.log_line(f"A2A auto-reply failed: {exc}")
+
+        def _worker():
+            try:
+                payload = None
+                raw = (message or "").strip()
+                if raw.startswith("{") and raw.endswith("}"):
+                    try:
+                        payload = json.loads(raw)
+                    except Exception:
+                        payload = None
+
+                msg_type = None
+                msg_text = raw
+                if payload:
+                    msg_type = (payload.get("type") or "").lower()
+                    msg_text = payload.get("text") or payload.get("task") or payload.get("message") or raw
+
+                # Simple prefix overrides
+                lowered = msg_text.lower().strip()
+                if lowered.startswith("plan:") or lowered.startswith("task:"):
+                    msg_type = "plan"
+                    msg_text = msg_text.split(":", 1)[1].strip()
+                if lowered.startswith("execute:"):
+                    msg_type = "execute"
+                    msg_text = msg_text.split(":", 1)[1].strip()
+
+                reply = ""
+                if msg_type in ("chat", "") and mode in ("chat", "auto"):
+                    reply = self._agent_chat(msg_text) or ""
+                elif msg_type in ("plan", "task") or mode in ("plan", "auto"):
+                    run = self._create_task_run(msg_text)
+                    reply = self._format_plan(run.intent, run.plan_steps)
+                elif msg_type == "execute":
+                    if str(getattr(self.settings, "a2a_execute_enabled", "false")).lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    ):
+                        run = self._create_task_run(msg_text)
+                        reply = self._format_plan(run.intent, run.plan_steps)
+                        reply = "EXECUTION DISABLED BY DEFAULT. Plan prepared:\n" + reply
+                    else:
+                        reply = "Execution disabled. Send `plan:` or `task:` to get a plan."
+                else:
+                    # Default lightweight ping response
+                    host = socket.gethostname()
+                    now = datetime.now().isoformat()
+                    reply = f"AUTO_REPLY: hostname={host} time={now}"
+
+                if reply:
+                    self.a2a_net.send(sender, getattr(self, "node_name", "work"), "remote", reply)
+                    self.log_line(f"A2A auto-reply sent to {sender}.")
+            except Exception as exc:
+                self.log_line(f"A2A auto-reply failed: {exc}")
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _record_action(self, step: PlanStep, status: str, error: str = "") -> None:
         if not self.current_run or not self.current_run.actions_path:
