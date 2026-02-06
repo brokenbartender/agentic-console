@@ -3853,6 +3853,23 @@ def _make_web_handler(app):
                 body = json.dumps(app.a2a.recent(20)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
+            if self.path == "/api/tools":
+                specs = []
+                try:
+                    for name, spec in app.tools.specs.items():
+                        specs.append(
+                            {
+                                "name": name,
+                                "risk": getattr(spec, "risk", ""),
+                                "arg_hint": getattr(spec, "arg_hint", ""),
+                                "splitter": getattr(spec, "splitter", ""),
+                            }
+                        )
+                except Exception:
+                    specs = []
+                body = json.dumps(specs).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
             if self.path == "/api/cockpit":
                 payload = {
                     "metrics": app.metrics.snapshot(),
@@ -3863,41 +3880,13 @@ def _make_web_handler(app):
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
             if self.path == "/dashboard":
-                html = """
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Agentic Cockpit</title>
-    <style>
-      body { font-family: Segoe UI, Arial, sans-serif; margin: 20px; }
-      pre { background: #f5f5f5; padding: 12px; white-space: pre-wrap; }
-      .row { display: flex; gap: 12px; }
-      .col { flex: 1; }
-    </style>
-  </head>
-  <body>
-    <h2>Agentic Cockpit</h2>
-    <div class="row">
-      <div class="col"><h4>Metrics</h4><pre id="metrics"></pre></div>
-      <div class="col"><h4>A2A</h4><pre id="a2a"></pre></div>
-    </div>
-    <h4>Events</h4>
-    <pre id="events"></pre>
-    <script>
-      async function refresh() {
-        const res = await fetch('/api/cockpit');
-        const data = await res.json();
-        document.getElementById('metrics').textContent = JSON.stringify(data.metrics, null, 2);
-        document.getElementById('a2a').textContent = JSON.stringify(data.a2a, null, 2);
-        document.getElementById('events').textContent = JSON.stringify(data.events, null, 2);
-      }
-      setInterval(refresh, 2000);
-      refresh();
-    </script>
-  </body>
-</html>
-"""
+                try:
+                    ui_path = os.path.join(app.settings.data_dir, "..", "ui", "control_plane", "index.html")
+                    ui_path = os.path.abspath(ui_path)
+                    with open(ui_path, "r", encoding="utf-8") as handle:
+                        html = handle.read()
+                except Exception:
+                    html = "<h2>Control Plane UI not found.</h2>"
                 self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html")
                 return
             if self.path != "/":
