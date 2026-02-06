@@ -101,6 +101,16 @@ Restart SSH after edits:
 Restart-Service sshd
 ```
 
+## End-to-end test (run on codex-work)
+After adding the key and restarting `sshd`, verify the connection from codex-work:
+```powershell
+ssh -i $env:USERPROFILE\.ssh\codydesktop codym@100.111.161.110
+```
+If it fails, capture the exact error text and re-check:
+- The key line exists in `C:\ProgramData\ssh\administrators_authorized_keys`
+- The file ACLs allow only `Administrators` and `SYSTEM`
+- `sshd` is running and port 22 is listening
+
 ### Current public key (generated on codex-work)
 Use this exact key on CODYDESKTOP:
 ```
