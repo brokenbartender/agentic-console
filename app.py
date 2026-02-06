@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import io
 import base64
+import queue
 import uuid
 import subprocess
 
