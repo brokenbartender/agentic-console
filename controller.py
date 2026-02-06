@@ -10,6 +10,7 @@ from config import get_settings
 from engine import AgentEngine
 from orchestrator.state import OrchestratorState
 from app import AgentApp, TaskRun
+from tools.registry import UnifiedToolRegistry
 
 
 class _DummyWidget:
@@ -59,6 +60,7 @@ class HeadlessController:
         self.root.withdraw()
         self.app = HeadlessApp(self.root, self.settings, self.engine)
         self.app._controller = self
+        self._tools = UnifiedToolRegistry.from_legacy(self.app)
 
         self.current_run: Optional[TaskRun] = None
         self.pending_runs: Dict[str, TaskRun] = {}
@@ -107,6 +109,74 @@ class HeadlessController:
         self.log("Starting execution...", type="info")
         self.app._run_task_run(run)
         self._sync_from_app()
+
+    def get_run_status(self, run_id: str) -> str:
+        run = self.pending_runs.get(run_id) or self.current_run
+        if not run:
+            return "unknown"
+        return run.status
+
+    def build_summary(self, run_id: str) -> str:
+        run = self.pending_runs.get(run_id) or self.current_run
+        if not run:
+            return "No run found."
+        lines = [
+            f"Run {run.run_id}",
+            f"Status: {run.status}",
+            "",
+            "What I did:",
+        ]
+        for step in run.plan_steps:
+            lines.append(f"- {step.step}. {step.action} → {step.target} ({step.reason})")
+        return "\n".join(lines)
+
+    def describe_agent(self) -> Dict:
+        roles = []
+        try:
+            if hasattr(self.app, "team") and hasattr(self.app.team, "roles"):
+                roles = [r.name for r in self.app.team.roles]
+        except Exception:
+            roles = []
+        return {
+            "role": "primary",
+            "goals": ["Execute user tasks safely"],
+            "tools": self._tools.list(),
+            "memory": {"shared": True},
+            "policies": {"autonomy": self.settings.autonomy_level},
+            "status": {
+                "current_run": self.current_run.run_id if self.current_run else None,
+                "pending": len(self.pending_runs),
+                "roles": roles,
+            },
+        }
+
+    def memory_snapshot(self) -> Dict:
+        profile = self.memory.get_user_profile("default")
+        return {"profile": profile}
+
+    def search_memory(self, query: str):
+        return self.memory.search_memory(query, limit=8, scope="shared")
+
+    def pin_memory(self, text: str) -> None:
+        self.memory.add_memory("pin", text, ttl_seconds=self.settings.long_memory_ttl)
+
+    def clear_memory(self) -> None:
+        self.memory.update_user_profile({}, user_id="default")
+
+    def edit_profile(self, key: str, value: str) -> None:
+        self.memory.update_user_profile({key: value}, user_id="default")
+
+    def list_workflows(self) -> List[str]:
+        wf_dir = os.path.join(os.getcwd(), "workflows")
+        if not os.path.isdir(wf_dir):
+            return []
+        return [os.path.join(wf_dir, name) for name in os.listdir(wf_dir) if name.endswith(".py")]
+
+    def run_workflow(self, path: str, goal: str = "") -> str:
+        try:
+            return self.app.workflow_use.run(path, goal=goal)
+        except Exception as exc:
+            return f"workflow error: {exc}"
 
     def stop(self) -> None:
         try:

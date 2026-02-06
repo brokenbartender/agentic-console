@@ -1,265 +1,74 @@
-﻿# Agentic Console
+# Agentic Console
 
-Local native agentic assistant with a Tkinter UI and web UI.
+Agentic Console is a local agent operating system: one chat UI, multiple agents behind the scenes, and a clear safety model.
 
-## Features
-- Natural language (no commands required)
-- Tool registry with confirmations for destructive actions
-- Planner / Executor / Verifier orchestration
-- Short + long memory with local vector search
-- Local Ollama fallback when OpenAI is unavailable
-- Task queue (serializes actions)
-- Metrics endpoint for quick health checks
-- RAG indexing + evidence retrieval
-- Deep Research workflow with reflection
-- Multimodal OCR hook (optional)
-- PDF indexing via `pypdf` (optional) with OCR fallback
-- Purpose tagging + audit trail metadata
-- Optional path/domain allowlists for tool actions
-- Log redaction + event retention controls
+## 60-second quickstart
 
-## Run
-```powershell
-python app.py
-```
-Web UI: `http://127.0.0.1:8333`
-UI now enforces INTENT → PLAN → PROOF. Click “Approve & Run” to execute.
-
-## Optional Dependencies
-```powershell
-python -m pip install pypdf
-python -m pip install pytesseract pillow pymupdf
-python -m pip install pyautogui
-python -m pip install openai-whisper sounddevice numpy
-python -m pip install pyttsx3
-```
-
-## Commands
-- `index <path>`: index a file or directory
-- `rag <query>`: answer with evidence + confidence
-- `hybrid_rag <query>`: answer using vector + graph hints
-- `rag_sources`: list indexed sources + ranks
-- `rag_rank <source> <rank>`: set a source rank (0.0-2.0)
-- `deep_research <question>`: plan + reflect + answer
-- `ocr <pdf>`: quick OCR preview (requires tesseract)
-- `simulate <tool> <args>`: dry-run a tool call without side effects
-- `screenshot <path>`: capture a desktop screenshot (requires pyautogui)
-- `listen [seconds]`: record audio and transcribe with Whisper (opt-in)
-- `speak <text>`: text-to-speech alert (requires pyttsx3)
-- `perception [path]`: capture a lightweight observation (optional screenshot)
-- `uia_snapshot [path]`: capture a Windows UI Automation snapshot (requires pywinauto)
-- `som_detect <image_path> [out_path]`: detect UI boxes via OmniParser-compatible endpoint
-- `explain <query>`: show routing + memory/evidence hints
-- `telemetry`: show metrics snapshot
-- `autonomy <level>`: set autonomy (supervised|semi|autonomous)
-- `workflow <name> | <payload>`: run a deterministic workflow
-- `workflow_record start <name> | stop | list`: record a workflow
-- `workflow_run <name>`: replay a recorded workflow
-- `browser_use <task>`: run browser-use agent (if installed)
-- `workflow_use <path> [goal]`: run workflow-use (if installed)
-
-## UI Launchers
-- `scripts/launch_open_webui.ps1`: Open WebUI (Artifacts-style UI)
-- `scripts/launch_flowise.ps1`: Flowise graph canvas
-- `scripts/launch_rivet.ps1`: Rivet live execution tracing
-- `scripts/launch_nicegui.ps1`: NiceGUI desktop companion
-- `slow_mode on|off`: enable deliberate System 2 pass
-- `dot_mode on|off`: enable diversity-of-thoughts drafting
-- `graph_query <entity>`: query GraphRAG neighbors for an entity
-- `graph_add <name> | <type>`: add graph entity
-- `graph_edge <src> | <rel> | <dst>`: add graph relation
-- `mcp_resources <provider>`: list MCP resources
-- `mcp_prompts <provider>`: list MCP prompts
-- `mcp_tools <provider>`: list MCP tools
-- `sandbox_run <code>`: run Python in a temp sandbox with timeout
-- `fishbowl`: show recent agent actions/events
-- `step_approval on|off`: require approval before each step
-- `assumption_add label | value | status | source`: save a market assumption
-- `assumption_list`: list market assumptions
-- `roadmap12 <niche>`: 12-week MVP roadmap
-- `pricing_sim <price> <target_mrr>`: pricing + customer count
-- `gtm_plan <niche>`: GTM channel plan
-- `data_moat <niche>`: data moat prompts
-- `aha_validate <niche>`: aha-moment validator
-- `compliance`: GDPR/EU AI Act checklist
-- `purpose <text>`: set a task purpose (used in audit logs)
-- `readiness`: show AI readiness snapshot
-- `governance`: show AI governance checklist + red flags
-- `data_profile <path>`: quick CSV/TSV missingness scan
-- `ai_interface`: checklist for agent-native interface design
-- `personalization`: checklist for generative personalization readiness
-- `ai_marketing`: checklist for marketing to AI systems
-- `strategy`: checklist for AI-driven planning and resource allocation
-- `synthetic_test <scenario>`: synthetic user critique using personas
-- `lit_review <query>`: literature summary from indexed evidence
-- `analysis_plan <question>`: rigorous analysis plan template
-- `ownership_companion <task>`: ownership assistant workflow
-- `dealer_assist <task>`: dealership workflow assistant
-- `mobile_work <task>`: voice-first mobile work helper
-- `audio_ai`: audio AI checklist
-- `persona_templates`: list persona templates
-- `persona_add <name> | <role> | <constraints>`: save persona definition
-- `personas`: list saved personas
-- `agent_types`: show AI agent types
-- `misalignment_check`: checklist for agent misalignment risks
-- `readiness_framework`: deployment readiness checklist
-- `long_run <title> | <milestones>`: track long-running agent work
-- `long_run_update <id> | <status> | <note>`: update long-run status
-- `long_runs`: list long-running tasks
-- `oversight_rule <rule> | <severity>`: add human-oversight rule
-- `oversight_rules`: list oversight rules
-- `agent_team <task>`: multi-agent coding team (planner/builder/reviewer/security/QA)
-- `sdlc_shift`: summary of SDLC changes with agents
-- `oversight_scaling`: checklist for scaling human oversight
-- `security_first`: checklist for security-first agentic coding
-- `agent_surfaces`: summary of new agentic coding surfaces
-- `pillars`: summarize perception/reasoning/planning/learning/verification/execution
-- `vertical_agents`: list industry-specific agent templates
-- `belief <text>`: store a belief (BDI)
-- `beliefs`: list beliefs
-- `desire <text>`: store a desire (BDI)
-- `desires`: list desires
-- `intention <text>`: store an intention (BDI)
-- `intentions`: list intentions
-- `action_space_add <name> | <description>`: register tool/action space
-- `action_space_list`: list action space entries
-- `action_space_remove <name>`: remove action space entry
-- `checkpoint <label>`: record a safety checkpoint
-- `checkpoints`: list checkpoints
-- `rollback_note <id> | <notes>`: attach rollback notes
-- `reflect <question>`: run draft/critique/revise loop
-- `r2e_index <repo_path>`: scan repo functions for eval indexing
-- `lab_note <text>`: save a lab notebook note
-- `hypothesis <text>`: save a hypothesis
-- `hypotheses`: list hypotheses
-- `experiment <title> | <plan>`: save an experiment plan
-- `experiments`: list experiments
-- `experiment_update <id> | <status> | <notes>`: update experiment status
-- `incident <severity> | <summary>`: log an incident
-- `incidents`: list recent incidents
-- `eval_run <name> | <notes>`: log an evaluation run
-- `evals`: list recent evaluations
-- `deployment_gate`: run deployment readiness gate
-- `red_team <scenario>`: generate red-team risks + mitigations
-- `mode <fast|rigorous>`: toggle analysis mode
-- `edge_mode <offline|online|auto>`: force edge/offline or cloud routing
-- `profile <name>`: set a profile tag for the assistant
-- `models`: show model run summary (latency/tokens/cost)
-- `feedback <rating> | <notes>`: log user feedback
-- `team <task>`: run a simple multi-agent team (planner/builder/reviewer)
-- `jobs`: list recent jobs
-- `a2a <sender -> receiver | message>`: send agent-to-agent message
-- `mcp <provider | json>`: call an MCP provider
-
-## Environment
-Create a `.env` in the project root:
-```
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5.1
-OPENAI_REASONING_MODEL=gpt-5.1
-OPENAI_CODING_MODEL=gpt-5.1
-OLLAMA_MODEL=phi3:latest
-OLLAMA_REASONING_MODEL=phi3:latest
-OLLAMA_CODING_MODEL=phi3:latest
-OLLAMA_BASE=http://127.0.0.1:11434
-TESSERACT_CMD=C:\\Program Files\\Tesseract-OCR\\tesseract.exe
-```
-
-Optional:
-```
-AGENTIC_EMBEDDING_DIM=256
-AGENTIC_SHORT_MEMORY_TTL=86400
-AGENTIC_LONG_MEMORY_TTL=2592000
-AGENTIC_AUTONOMY_LEVEL=semi
-AGENTIC_WEB_PORT=8333
-AGENTIC_ALLOWED_PATHS=C:\\Users\\codym\\Documents;C:\\Users\\codym\\Downloads
-AGENTIC_ALLOWED_DOMAINS=example.com,openai.com
-AGENTIC_REDACT_LOGS=true
-AGENTIC_PURPOSE=General assistance
-AGENTIC_EVENT_RETENTION_SECONDS=2592000
-AGENTIC_DEMO_MODE=true
-AGENTIC_VLA_ENABLED=true
-AGENTIC_VLA_MODEL=gpt-4o-mini
-AGENTIC_VLA_INTERVAL=1.0
-AGENTIC_VLA_GRID=6
-AGENTIC_VLA_READONLY=true
-AGENTIC_VLA_PAUSE_KEY=f9
-AGENTIC_VLA_MODE=auto
-AGENTIC_VLA_STITCH=false
-AGENTIC_VLA_FRAMES=1
-AGENTIC_VLA_TILES=1
-AGENTIC_VLA_EXPLORE=false
-AGENTIC_SOM_ENDPOINT=http://127.0.0.1:8000/detect
-AGENTIC_SOM_OVERLAY=false
-AGENTIC_DOM_PRIORITY=true
-AGENTIC_DOM_BLOCKLIST=delete,remove,close,sign out,logout,log out,unsubscribe,drop,format,wipe
-AGENTIC_NET_LOG=false
-AGENTOPS_API_KEY=...
-OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces
-OTEL_SERVICE_NAME=agentic-console
-MCP_GITHUB_URL=http://localhost:9000/github
-MCP_DRIVE_URL=http://localhost:9000/drive
-GITHUB_TOKEN=...
-GOOGLE_DRIVE_TOKEN=...
-OPENAI_COST_INPUT_PER_1M=0
-OPENAI_COST_OUTPUT_PER_1M=0
-OLLAMA_COST_INPUT_PER_1M=0
-OLLAMA_COST_OUTPUT_PER_1M=0
-```
-
-## Endpoints
-- `GET /health` => `ok`
-- `GET /api/metrics` => JSON metrics
-- `GET /api/trace` => recent events
-- `GET /api/jobs` => recent jobs
-- `GET /api/models` => model run summary
-- `GET /api/a2a` => recent A2A messages
-- `POST /api/command` => send a command
-
-## Tests
-```powershell
-python -m unittest discover -s tests
-python evals/run_evals.py
-```
-## Local Dual-Peer Mode
-
-You can run two local AgenticConsole instances that talk to each other over A2A. This replaces the laptop/desktop split with two peers on localhost.
-
-### Launch (visible windows)
+1. Install requirements:
 
 ```
-C:\Users\codym\AgenticConsole\scripts\launch_local_dual_peers.ps1
+pip install nicegui
 ```
 
-### Launch (hidden windows)
+2. Start the app:
 
 ```
-C:\Users\codym\AgenticConsole\scripts\launch_local_dual_peers_hidden.ps1
+python C:\Users\codym\AgenticConsole\app.py
 ```
 
-Default ports:
-- Peer A: A2A 9451, Web 8333
-- Peer B: A2A 9452, Web 8334
-
-You can open:
-- http://127.0.0.1:8333/dashboard (peer A)
-- http://127.0.0.1:8334/dashboard (peer B)
-
-Both peers are auto-linked via `AGENTIC_A2A_PEERS` and auto-reply is enabled.
-
-### Default: Local Dual-Peer on App Start
-
-By default, `app.py` now auto-launches two local peers and exits the launcher process. To disable:
+3. Open the UI:
 
 ```
-set AGENTIC_LOCAL_DUAL_PEERS=false
+http://127.0.0.1:8333
 ```
 
-To hide the peer windows:
+## What problem this solves
+
+- Run complex tasks through a single chat interface.
+- Agents plan, execute, and report outcomes with approvals for risky actions.
+- Memory and workflows are persisted locally.
+
+## One canonical runtime
+
+Everything runs through `runtime/run.py` and the lifecycle loop in `runtime/lifecycle.py`.
+
+Examples:
 
 ```
-set AGENTIC_LOCAL_DUAL_PEERS_HIDDEN=true
+python C:\Users\codym\AgenticConsole\runtime\run.py run "analyze this repo and summarize risks"
+python C:\Users\codym\AgenticConsole\runtime\run.py agent tools
+python C:\Users\codym\AgenticConsole\runtime\run.py memory show
+python C:\Users\codym\AgenticConsole\runtime\run.py workflow list
 ```
+
+## Safety & trust model
+
+- Tools are tagged by risk level.
+- Destructive actions require explicit approval.
+- Autonomy level can be tuned in config.
+
+## Extending the system
+
+- Add tools: `tools/registry.py`
+- Add agents: `agents.py`
+- Add workflows: `workflows/`
+
+## UI
+
+- Default UI: NiceGUI dashboard (`dashboard.py`)
+- Legacy UI: set `AGENTIC_UI=tk`
+
+## A2A handshake
+
+Automatic peer handshakes are **off** by default. To enable:
+
+```
+set AGENTIC_A2A_HANDSHAKE=true
+```
+
+### Default UI
+
+`app.py` launches the NiceGUI dashboard by default (set `AGENTIC_UI=tk` to force legacy UI).
 
 ### Headless + NiceGUI Dashboard
 
@@ -270,15 +79,3 @@ python C:\Users\codym\AgenticConsole\dashboard.py
 ```
 
 This launches one chat interface. The controller decides which tools to use and runs the plan. Approvals are inline in the UI.
-
-### Default UI
-
-`app.py` now launches the NiceGUI dashboard by default (set `AGENTIC_UI=tk` to force legacy UI).
-
-### A2A Handshake
-
-Automatic peer handshakes are **off** by default. To enable:
-
-```
-set AGENTIC_A2A_HANDSHAKE=true
-```
