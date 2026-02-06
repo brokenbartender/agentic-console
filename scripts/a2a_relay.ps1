@@ -32,7 +32,7 @@ while ($true) {
       if ($count -gt $state.last_line) {
         $new = $lines[$state.last_line..($count-1)]
         foreach ($line in $new) {
-          if ($line -match "INBOUND from desktop") {
+          if ($line -match "INBOUND from ") {
             Write-Output $line
           }
         }

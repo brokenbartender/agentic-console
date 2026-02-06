@@ -78,11 +78,10 @@ while ($true) {
   try {
     $msgs = Invoke-RestMethod -Method Get -Uri $A2AApi
     if ($msgs) {
-      # msgs are newest-first; process ascending by timestamp
       $new = $msgs | Where-Object { $_.timestamp -gt $state.last_ts } | Sort-Object -Property timestamp
       foreach ($m in $new) {
-        # Only respond to peer -> sender messages
-        if ($m.sender -eq $PeerName -and $m.receiver -eq $SenderName) {
+        # Respond to any message from the peer (receiver may be "remote" or "local")
+        if ($m.sender -eq $PeerName) {
           Log-Line "INBOUND from $($m.sender): $($m.message)"
           $prompt = "Desktop message: $($m.message)`nRespond concisely."
           $reply = Run-Codex $prompt
