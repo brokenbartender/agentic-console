@@ -719,7 +719,8 @@ class AgentApp:
         peer = (self.a2a_peer_var.get() or "desktop").strip()
         sender = "user" if join else getattr(self, "node_name", "work")
         try:
-            self.a2a_net.send(peer, sender, "remote", message)
+            with self.otel.span("a2a_send", trace_id="", attributes={"peer": peer, "sender": sender}):
+                self.a2a_net.send(peer, sender, "remote", message)
             self.log_line(f"A2A send to {peer}: {message}")
         except Exception as exc:
             self.log_line(f"A2A send failed: {exc}")
@@ -1154,6 +1155,18 @@ class AgentApp:
         self._on_a2a_message_impl(sender, receiver, message)
 
     def _on_a2a_message_impl(self, sender: str, receiver: str, message: str) -> None:
+        trace_id = ""
+        try:
+            raw = (message or "").strip()
+            if raw.startswith("{") and raw.endswith("}"):
+                payload = json.loads(raw)
+                trace_id = payload.get("trace_id") or ""
+        except Exception:
+            trace_id = ""
+        try:
+            self.otel.log_event(trace_id, "a2a_receive", {"sender": sender, "receiver": receiver})
+        except Exception:
+            pass
         # Ensure summary file exists for downstream tooling even if other hooks fail.
         try:
             path = os.path.join(self.settings.data_dir, "a2a_thread_summaries.json")
@@ -1286,6 +1299,10 @@ class AgentApp:
                         "thread_id": thread_id or message_id,
                         "reply_to": message_id,
                     }
+                    try:
+                        self.otel.log_event(trace_id or "", "a2a_send", {"peer": sender, "sender": getattr(self, "node_name", "work")})
+                    except Exception:
+                        pass
                     self.a2a_net.send(sender, getattr(self, "node_name", "work"), "remote", reply_payload)
                     self.log_line(f"A2A auto-reply sent to {sender}.")
             except Exception as exc:

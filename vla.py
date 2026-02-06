@@ -17,6 +17,10 @@ try:
     from PIL import Image
 except Exception:
     Image = None
+try:
+    from PIL import ImageDraw
+except Exception:
+    ImageDraw = None
 
 try:
     import keyboard
@@ -213,6 +217,7 @@ class LiveDriver:
         read_only = _parse_bool(os.getenv("AGENTIC_VLA_READONLY", "true"), True)
         stitch_desktop = _parse_bool(os.getenv("AGENTIC_VLA_STITCH", "false"), False)
         som_endpoint = os.getenv("AGENTIC_SOM_ENDPOINT", "").strip()
+        som_overlay = _parse_bool(os.getenv("AGENTIC_SOM_OVERLAY", "false"), False)
         frames = max(1, int(os.getenv("AGENTIC_VLA_FRAMES", "1")))
         tiles = max(1, int(os.getenv("AGENTIC_VLA_TILES", "1")))
         explore = _parse_bool(os.getenv("AGENTIC_VLA_EXPLORE", "false"), False)
@@ -286,6 +291,11 @@ class LiveDriver:
             if som_endpoint:
                 som = self._som_detect(som_endpoint, image_path)
             self.state.last_som = som or []
+            if som_overlay and som:
+                try:
+                    self._draw_som_overlay(image_path, som)
+                except Exception:
+                    pass
 
             prompt = self._build_prompt(grid_size, dom, som, web_mode)
             reply = ""
@@ -470,6 +480,9 @@ class LiveDriver:
             idx = int(element_id)
         except Exception:
             return
+        if self._is_blocked_element(idx):
+            self.app.log_line(f"VLA: blocked click on element {idx} (blacklist).")
+            return
         script = """
 (elementId) => {
   const selectors = [
@@ -492,6 +505,83 @@ class LiveDriver:
 }
 """
         page.evaluate(script, idx)
+
+    def _click_dom_at_point(self, x: int, y: int) -> bool:
+        page = getattr(self.app, "page", None)
+        if page is None:
+            return False
+        script = """
+(x, y) => {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
+  return { tag: el.tagName ? el.tagName.toLowerCase() : '', text };
+}
+"""
+        try:
+            info = page.evaluate(script, x, y)
+            if not isinstance(info, dict):
+                return False
+            if self._is_blocked_text(info.get("text", "")):
+                self.app.log_line("VLA: blocked click at point (blacklist).")
+                return True
+            page.mouse.click(int(x), int(y))
+            return True
+        except Exception:
+            return False
+
+    def _is_blocked_text(self, text: str) -> bool:
+        blocklist = os.getenv(
+            "AGENTIC_DOM_BLOCKLIST",
+            "delete,remove,close,sign out,logout,log out,unsubscribe,drop,format,wipe",
+        )
+        lowered = (text or "").lower()
+        for term in [t.strip().lower() for t in blocklist.split(",") if t.strip()]:
+            if term and term in lowered:
+                return True
+        return False
+
+    def _is_blocked_element(self, element_id: int) -> bool:
+        for item in self.state.last_dom:
+            if not isinstance(item, dict):
+                continue
+            if int(item.get("element_id", -1)) != int(element_id):
+                continue
+            text = " ".join(
+                [
+                    str(item.get("text", "")),
+                    str(item.get("aria", "")),
+                    str(item.get("href", "")),
+                ]
+            )
+            return self._is_blocked_text(text)
+        return False
+
+    def _draw_som_overlay(self, image_path: str, som: list) -> None:
+        if Image is None or ImageDraw is None:
+            return
+        try:
+            img = Image.open(image_path)
+            draw = ImageDraw.Draw(img)
+            for item in som:
+                if not isinstance(item, dict):
+                    continue
+                box = item.get("box") if isinstance(item.get("box"), dict) else {}
+                bx = item.get("x", box.get("x"))
+                by = item.get("y", box.get("y"))
+                bw = item.get("w", box.get("w"))
+                bh = item.get("h", box.get("h"))
+                label = item.get("label_id") or item.get("id") or item.get("index")
+                if bx is None or by is None or bw is None or bh is None:
+                    continue
+                x1, y1 = float(bx), float(by)
+                x2, y2 = x1 + float(bw), y1 + float(bh)
+                draw.rectangle([x1, y1, x2, y2], outline=(0, 255, 0), width=2)
+                if label is not None:
+                    draw.text((x1 + 2, y1 + 2), str(label), fill=(0, 255, 0))
+            img.save(image_path)
+        except Exception:
+            return
 
     def _capture_desktop_stitch(self, base_path: str, grid_size: int = 6) -> str:
         if pyautogui is None or Image is None:
@@ -617,6 +707,9 @@ class LiveDriver:
             if x is not None and y is not None:
                 if web_mode and getattr(self.app, "page", None) is not None:
                     try:
+                        if _parse_bool(os.getenv("AGENTIC_DOM_PRIORITY", "true"), True):
+                            if self._click_dom_at_point(int(x), int(y)):
+                                return
                         self.app.page.mouse.click(int(x), int(y))
                         return
                     except Exception:
