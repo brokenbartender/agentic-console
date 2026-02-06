@@ -177,6 +177,80 @@
         border: none;
       }
 
+      .sheet {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 360px;
+        height: 100%;
+        background: #fff;
+        border-left: 1px solid var(--line);
+        box-shadow: var(--shadow);
+        transform: translateX(100%);
+        transition: transform 0.3s ease;
+        padding: 16px;
+        z-index: 10;
+        overflow: auto;
+      }
+
+      .sheet.open {
+        transform: translateX(0);
+      }
+
+      .overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.15);
+        display: none;
+        z-index: 9;
+      }
+
+      .overlay.show {
+        display: block;
+      }
+
+      .brain-view {
+        position: fixed;
+        inset: 0;
+        background: rgba(20,20,20,0.7);
+        display: none;
+        z-index: 20;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .brain-view.show {
+        display: flex;
+      }
+
+      .brain-canvas {
+        background: #fff;
+        border-radius: 16px;
+        padding: 16px;
+        width: 80%;
+        max-width: 900px;
+      }
+
+      .hud {
+        position: fixed;
+        bottom: 18px;
+        right: 18px;
+        width: 240px;
+        height: 160px;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #000;
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+        z-index: 8;
+      }
+
+      .hud img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
       .events {
         grid-column: 1 / 3;
         max-height: 380px;
@@ -237,6 +311,8 @@
             <option value="VLA">VLA Operator</option>
             <option value="Reviewer">Reviewer</option>
           </select>
+          <button class="secondary" onclick="toggleSheet()">Config</button>
+          <button class="secondary" onclick="toggleBrain()">Brain View</button>
         </div>
       </header>
       <main>
@@ -273,11 +349,36 @@
           <div id="a2a"></div>
         </div>
 
+        <div class="card">
+          <h3>Terminal Output</h3>
+          <pre id="terminal" class="mono">No output yet.</pre>
+        </div>
+
+        <div class="card">
+          <h3>Sources</h3>
+          <div id="sources"></div>
+        </div>
+
         <div class="card tools">
           <h3 style="grid-column:1/-1;">Tools</h3>
           <div id="tools" class="tools"></div>
         </div>
       </main>
+    </div>
+    <div class="overlay" id="overlay" onclick="toggleSheet(false)"></div>
+    <div class="sheet" id="sheet">
+      <h3>Configuration</h3>
+      <pre id="config" class="mono">Loading...</pre>
+    </div>
+    <div class="brain-view" id="brain">
+      <div class="brain-canvas">
+        <h3>Agent Mesh</h3>
+        <svg id="brain-svg" width="100%" height="420"></svg>
+        <button class="secondary" onclick="toggleBrain(false)">Close</button>
+      </div>
+    </div>
+    <div class="hud">
+      <img id="hud-image" alt="VLA HUD" />
     </div>
 
     <script>
@@ -323,7 +424,7 @@
         const el = document.getElementById("events");
         el.innerHTML = items.map((e) => {
           const payload = JSON.stringify(e.payload || {}, null, 2);
-          return `<div class="event"><strong>${e.event_type}</strong> <div class="mono">${payload}</div></div>`;
+          return `<details class="event"><summary><strong>${e.event_type}</strong></summary><div class="mono">${payload}</div></details>`;
         }).join("");
       }
 
@@ -339,6 +440,81 @@
         el.innerHTML = items.map((t) => {
           return `<div class="tool"><div><strong>${t.name}</strong></div><div class="risk">risk: ${t.risk || "n/a"}</div><div class="mono">${t.arg_hint || ""}</div></div>`;
         }).join("");
+      }
+
+      function renderSources(items) {
+        const el = document.getElementById("sources");
+        if (!items.length) {
+          el.innerHTML = "<div class='event'>No sources indexed.</div>";
+          return;
+        }
+        el.innerHTML = items.map((s) => {
+          return `<div class="event"><strong>${s.source}</strong> chunks=${s.chunks} rank=${(s.avg_rank || 0).toFixed(2)}</div>`;
+        }).join("");
+      }
+
+      function toggleSheet(show) {
+        const sheet = document.getElementById("sheet");
+        const overlay = document.getElementById("overlay");
+        const open = show === undefined ? !sheet.classList.contains("open") : show;
+        sheet.classList.toggle("open", open);
+        overlay.classList.toggle("show", open);
+      }
+
+      function toggleBrain(show) {
+        const brain = document.getElementById("brain");
+        const open = show === undefined ? !brain.classList.contains("show") : show;
+        brain.classList.toggle("show", open);
+      }
+
+      function renderBrain(graph) {
+        const svg = document.getElementById("brain-svg");
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        const nodes = graph.nodes || [];
+        const edges = graph.edges || [];
+        const width = svg.clientWidth || 800;
+        const height = svg.clientHeight || 420;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const radius = Math.min(width, height) / 3;
+        const positions = {};
+        nodes.forEach((n, i) => {
+          const angle = (i / Math.max(1, nodes.length)) * Math.PI * 2;
+          positions[n.id] = {
+            x: centerX + Math.cos(angle) * radius,
+            y: centerY + Math.sin(angle) * radius,
+          };
+        });
+        edges.forEach((e) => {
+          const s = positions[e.source];
+          const t = positions[e.target];
+          if (!s || !t) return;
+          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          line.setAttribute("x1", s.x);
+          line.setAttribute("y1", s.y);
+          line.setAttribute("x2", t.x);
+          line.setAttribute("y2", t.y);
+          line.setAttribute("stroke", "#1b7f6b");
+          line.setAttribute("stroke-width", Math.max(1, e.count / 2));
+          svg.appendChild(line);
+        });
+        nodes.forEach((n) => {
+          const pos = positions[n.id];
+          const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          circle.setAttribute("cx", pos.x);
+          circle.setAttribute("cy", pos.y);
+          circle.setAttribute("r", 18);
+          circle.setAttribute("fill", n.type === "local" ? "#ff8a3d" : "#3c5ccf");
+          svg.appendChild(circle);
+          const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          label.setAttribute("x", pos.x);
+          label.setAttribute("y", pos.y + 4);
+          label.setAttribute("text-anchor", "middle");
+          label.setAttribute("fill", "#fff");
+          label.setAttribute("font-size", "12");
+          label.textContent = n.label;
+          svg.appendChild(label);
+        });
       }
 
       function extractArtifacts(events) {
@@ -375,6 +551,18 @@
         document.getElementById("status-events").textContent = `Events: ${cockpit.events ? cockpit.events.length : 0}`;
         const tools = await fetch("/api/tools").then((r) => r.json());
         renderTools(tools || []);
+        const sources = await fetch("/api/rag_sources").then((r) => r.json());
+        renderSources(sources || []);
+        const cfg = await fetch("/api/config").then((r) => r.json());
+        document.getElementById("config").textContent = JSON.stringify(cfg, null, 2);
+        const log = await fetch("/api/log_tail").then((r) => r.json());
+        document.getElementById("terminal").textContent = (log.lines || []).join("\\n");
+        const hud = await fetch("/api/vla_latest").then((r) => r.json());
+        if (hud.image) {
+          document.getElementById("hud-image").src = hud.image;
+        }
+        const graph = await fetch("/api/graph").then((r) => r.json());
+        renderBrain(graph || {});
 
         const artifact = extractArtifacts(cockpit.events || []);
         if (artifact) {

@@ -19,6 +19,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import io
+import base64
 import uuid
 import subprocess
 
@@ -3868,6 +3869,78 @@ def _make_web_handler(app):
                 except Exception:
                     specs = []
                 body = json.dumps(specs).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/config":
+                try:
+                    data = app.settings.__dict__
+                except Exception:
+                    data = {}
+                body = json.dumps(data).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/log_tail":
+                limit = 200
+                try:
+                    limit = int(self.headers.get("X-Lines", "200"))
+                except Exception:
+                    limit = 200
+                lines = []
+                try:
+                    if os.path.exists(app.settings.log_file):
+                        with open(app.settings.log_file, "r", encoding="utf-8", errors="ignore") as handle:
+                            lines = handle.read().splitlines()[-limit:]
+                except Exception:
+                    lines = []
+                body = json.dumps({"lines": lines}).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/vla_latest":
+                img = ""
+                try:
+                    vla_dir = os.path.join(app.settings.data_dir, "vla")
+                    if os.path.isdir(vla_dir):
+                        files = [f for f in os.listdir(vla_dir) if f.endswith(".png")]
+                        if files:
+                            files.sort(key=lambda f: os.path.getmtime(os.path.join(vla_dir, f)))
+                            latest = os.path.join(vla_dir, files[-1])
+                            with open(latest, "rb") as handle:
+                                b64 = base64.b64encode(handle.read()).decode("ascii")
+                            img = f"data:image/png;base64,{b64}"
+                except Exception:
+                    img = ""
+                body = json.dumps({"image": img}).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/graph":
+                nodes = []
+                edges = {}
+                try:
+                    nodes.append({"id": app.node_name, "label": app.node_name, "type": "local"})
+                    for peer in app.a2a_net.peers:
+                        nodes.append({"id": peer, "label": peer, "type": "peer"})
+                    msgs = app.a2a.recent(200)
+                    for m in msgs:
+                        s = m.get("sender")
+                        r = m.get("receiver")
+                        key = f"{s}->{r}"
+                        edges[key] = edges.get(key, 0) + 1
+                except Exception:
+                    pass
+                payload = {
+                    "nodes": nodes,
+                    "edges": [{"source": k.split("->")[0], "target": k.split("->")[1], "count": v} for k, v in edges.items()],
+                }
+                body = json.dumps(payload).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/rag_sources":
+                sources = []
+                try:
+                    sources = app.rag.list_sources()
+                except Exception:
+                    sources = []
+                body = json.dumps(sources).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
             if self.path == "/api/cockpit":
