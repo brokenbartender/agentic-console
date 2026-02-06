@@ -65,3 +65,17 @@ Message formats supported:
 - Plain text → handled per mode
 - `plan: <task>` or `task: <task>` → returns a plan
 - JSON: `{"type":"plan","text":"<task>"}` or `{"type":"chat","text":"<message>"}`  
+## Auto-Update
+To keep the desktop/laptop in sync without manual pulls, use:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\auto_update.ps1
+```
+
+This script pulls these repos by default:
+- `C:\Users\codym\AgenticConsole`
+- `C:\Users\codym\agentic-control-plane`
+- `C:\Users\codym\codex-control-stack`
+
+If AgenticConsole changes, it restarts the app and triggers A2A tasks.
+Logs: `C:\Users\codym\AgenticConsole\data\auto_update.log`
