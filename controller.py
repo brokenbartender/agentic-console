@@ -21,6 +21,7 @@ from core.schemas import (
     Budget,
 )
 from agents import PlannerAgent, RetrieverAgent, VerifierAgent
+from core.run_state import list_run_dirs, summarize_run, load_json
 
 
 class _DummyWidget:
@@ -387,6 +388,15 @@ class HeadlessController:
             return self.app.workflow_use.run(path, goal=goal)
         except Exception as exc:
             return f"workflow error: {exc}"
+
+    def list_runs(self) -> List[Dict[str, Any]]:
+        base = os.path.join(self.settings.data_dir, "runs")
+        return [summarize_run(os.path.join(base, d)) for d in list_run_dirs(base)]
+
+    def load_run_goal(self, run_id: str) -> str:
+        base = os.path.join(self.settings.data_dir, "runs", run_id)
+        plan = load_json(os.path.join(base, "plan.json"))
+        return plan.get("goal", "")
 
     def stop(self) -> None:
         try:

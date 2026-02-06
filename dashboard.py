@@ -1,5 +1,6 @@
 from nicegui import ui
 from controller import HeadlessController
+import json
 
 ctrl = HeadlessController()
 
@@ -19,6 +20,7 @@ def main_dashboard():
             planner_badge = ui.badge("Planner", color="blue").classes("text-xs")
             executor_badge = ui.badge("Executor", color="purple").classes("text-xs")
             verifier_badge = ui.badge("Verifier", color="gray").classes("text-xs")
+            ui.button("Agent Info", on_click=lambda: show_agent_info()).props("outline")
 
     with ui.row().classes("w-full h-[calc(100vh-80px)] no-wrap"):
         with ui.column().classes("w-2/3 h-full p-4 gap-4"):
@@ -38,8 +40,9 @@ def main_dashboard():
 
         with ui.column().classes("w-1/3 h-full border-l border-gray-800 bg-gray-900/30 p-4"):
             with ui.tabs().classes("w-full") as tabs:
-                tab_plan = ui.tab("Current Plan")
+                tab_plan = ui.tab("Plan")
                 tab_mem = ui.tab("Memory")
+                tab_runs = ui.tab("Runs")
             with ui.tab_panels(tabs, value=tab_plan).classes("w-full bg-transparent"):
                 with ui.tab_panel(tab_plan):
                     plan_container = ui.column().classes("w-full gap-2")
@@ -63,6 +66,18 @@ def main_dashboard():
                         label_key="label",
                         tick_strategy="leaf",
                     )
+                with ui.tab_panel(tab_runs):
+                    runs_container = ui.column().classes("w-full gap-2")
+
+    def show_agent_info():
+        info = ctrl.describe_agent()
+        ui.dialog().props("persistent").clear()
+        with ui.dialog() as dialog:
+            with ui.card().classes("w-full"):
+                ui.label("Agent Info")
+                ui.code(json.dumps(info, indent=2)).classes("w-full")
+                ui.button("Close", on_click=dialog.close)
+        dialog.open()
 
     def render_logs():
         log_container.clear()
@@ -137,6 +152,22 @@ def main_dashboard():
             approval_row.classes(remove="hidden")
             approve_btn.on_click(lambda: (ctrl.approve_run(run.run_id), render_plan()))
 
+    def render_runs():
+        runs_container.clear()
+        runs = ctrl.list_runs()
+        for item in runs:
+            with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
+                ui.label(item.get("run_id", ""))
+                ui.label(item.get("goal", ""))
+                ui.label(item.get("status", ""))
+                ui.button("Fork", on_click=lambda rid=item.get("run_id", ""): fork_run(rid))
+
+    def fork_run(run_id: str):
+        goal = ctrl.load_run_goal(run_id)
+        if goal:
+            ctrl.plan_task(goal)
+            render_plan()
+
     def render_activity():
         text_blob = " ".join([e.get("message", "") for e in ctrl.activity_log[-20:]]).lower()
         planner_active = "planning" in text_blob or "plan created" in text_blob
@@ -153,9 +184,11 @@ def main_dashboard():
         ctrl.plan_task(text)
         render_logs()
         render_plan()
+        render_runs()
 
     ui.timer(1.0, render_logs)
     ui.timer(1.0, render_plan)
+    ui.timer(1.0, render_runs)
     ui.timer(1.0, render_activity)
 
 def run_dashboard():

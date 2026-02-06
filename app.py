@@ -2266,6 +2266,7 @@ class AgentApp:
         tool_calls = 0
         started = time.time()
         for step in plan.steps:
+            self._write_run_state(plan, report, current_step=step.step_id)
             if len(report.steps) >= plan.budget.max_steps:
                 report.status = "failed"
                 report.failure_reason = "Budget exceeded: max_steps"
@@ -2336,6 +2337,7 @@ class AgentApp:
             report.status = "succeeded"
         report.ended_at = time.time()
         self._log_event("run_finished", {"status": report.status, "failure_reason": report.failure_reason})
+        self._write_run_state(plan, report, current_step=None)
         return report
 
     def _write_run_artifacts(self, plan: PlanSchema, report: ExecutionReport) -> None:
@@ -2365,6 +2367,22 @@ class AgentApp:
             lines.append(report.failure_reason or "succeeded")
             with open(summary_path, "w", encoding="utf-8") as handle:
                 handle.write("\n".join(lines))
+        except Exception:
+            return
+
+    def _write_run_state(self, plan: PlanSchema, report: ExecutionReport, current_step: int | None) -> None:
+        try:
+            base = os.path.join(self.settings.data_dir, "runs", plan.run_id)
+            os.makedirs(base, exist_ok=True)
+            state = {
+                "run_id": plan.run_id,
+                "goal": plan.goal,
+                "status": report.status,
+                "current_step": current_step,
+                "updated_at": time.time(),
+            }
+            with open(os.path.join(base, "state.json"), "w", encoding="utf-8") as handle:
+                json.dump(state, handle, indent=2)
         except Exception:
             return
 
