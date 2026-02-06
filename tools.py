@@ -95,6 +95,14 @@ class ToolRegistry:
                 last_err = exc
         raise last_err
 
+    def call(self, name: str, args: dict | str, ctx: ToolContext | None = None):
+        if isinstance(args, dict):
+            raw = args.get("raw") or ""
+            if not raw:
+                raw = json.dumps(args)
+            return self.execute(name, raw, ctx=ctx)
+        return self.execute(name, str(args), ctx=ctx)
+
     def _validate_args(self, spec: ToolSpec, raw_args: str) -> None:
         if spec.min_parts <= 0:
             return

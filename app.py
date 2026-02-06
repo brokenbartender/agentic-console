@@ -2201,6 +2201,8 @@ class AgentApp:
                 spec = self.tools.specs.get(name)
                 risk = spec.risk if spec else "safe"
                 confirm = bool(getattr(spec, "confirm_required", False))
+                if requires_confirmation(risk, getattr(self.settings, "autonomy_level", "semi")):
+                    confirm = True
                 return PlanStepSchema(
                     step_id=step_id,
                     title=f"{name} {args_str}"[:120],
@@ -2304,8 +2306,18 @@ class AgentApp:
                     {"tool": step.tool, "args": step.args, "attempt": attempt},
                     extra={"step_id": step.step_id},
                 )
+                if step.tool == "computer":
+                    try:
+                        self._execute_tool("computer", json.dumps({"mode": "observe", "out_dir": os.path.join(self.settings.data_dir, "runs", plan.run_id)}))
+                    except Exception:
+                        pass
                 tr = self._execute_step_schema(step)
                 step_rep.tool_results.append(tr)
+                if step.tool == "computer":
+                    try:
+                        self._execute_tool("computer", json.dumps({"mode": "observe", "out_dir": os.path.join(self.settings.data_dir, "runs", plan.run_id)}))
+                    except Exception:
+                        pass
                 self._log_event(
                     "tool_call_finished",
                     {"tool": tr.name, "ok": tr.ok, "output_preview": tr.output_preview, "error": tr.error},
@@ -2325,6 +2337,36 @@ class AgentApp:
         report.ended_at = time.time()
         self._log_event("run_finished", {"status": report.status, "failure_reason": report.failure_reason})
         return report
+
+    def _write_run_artifacts(self, plan: PlanSchema, report: ExecutionReport) -> None:
+        try:
+            run_id = plan.run_id
+            base = os.path.join(self.settings.data_dir, "runs", run_id)
+            os.makedirs(base, exist_ok=True)
+            with open(os.path.join(base, "plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(plan, handle, default=lambda o: o.__dict__, indent=2)
+            with open(os.path.join(base, "report.json"), "w", encoding="utf-8") as handle:
+                json.dump(report, handle, default=lambda o: o.__dict__, indent=2)
+            summary_path = os.path.join(base, "summary.md")
+            lines = [
+                f"# Run {run_id}",
+                "",
+                f"Status: {report.status}",
+                "",
+                "## Goal",
+                plan.goal,
+                "",
+                "## Steps",
+            ]
+            for step in plan.steps:
+                lines.append(f"- {step.step_id}. {step.title} (tool={step.tool}, risk={step.risk})")
+            lines.append("")
+            lines.append("## Result")
+            lines.append(report.failure_reason or "succeeded")
+            with open(summary_path, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines))
+        except Exception:
+            return
 
     def _execute_tool(self, name: str, args: str, confirm: bool = False, dry_run: bool = False):
 
@@ -3230,6 +3272,29 @@ class AgentApp:
             report = self._run_plan_schema(plan_schema)
             if getattr(self, "current_run", None):
                 self.current_run.report = report
+                self._write_run_artifacts(plan_schema, report)
+
+            if report.status in ("failed", "error"):
+                # One reflection pass: replan based on failure evidence.
+                reflect_prompt = f"Fix failures: {report.failure_reason}. Original task: {instruction}"
+                reflect_plan = self.planner.plan(reflect_prompt)
+                if reflect_plan:
+                    steps = [self._step_to_schema(i + 1, s) for i, s in enumerate(reflect_plan)]
+                    plan_schema = PlanSchema(
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        goal=reflect_prompt,
+                        success_criteria=["No errors and user intent satisfied"],
+                        steps=steps,
+                        constraints={"demo_mode": self.demo_mode},
+                        budget=plan_schema.budget,
+                        created_at=time.time(),
+                        model=getattr(self.settings, "openai_model", ""),
+                    )
+                    report = self._run_plan_schema(plan_schema)
+                    if getattr(self, "current_run", None):
+                        self.current_run.report = report
+                        self._write_run_artifacts(plan_schema, report)
 
             return "Done." if report.status == "succeeded" else f"Run ended: {report.status}"
 
