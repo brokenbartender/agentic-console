@@ -40,6 +40,7 @@ from engine import AgentEngine
 from logger import setup_logging
 
 from metrics import Metrics
+from telemetry_langfuse import LangfuseClient
 
 from task_queue import TaskQueue
 
@@ -298,6 +299,7 @@ class AgentApp:
         self.a2a_pause_path = os.path.join(self.settings.data_dir, "a2a_bridge_pause.json")
 
         self.metrics = engine.metrics
+        self.langfuse = LangfuseClient()
         self.task_queue = engine.task_queue
 
 
@@ -787,6 +789,12 @@ class AgentApp:
             timestamp=time.time(),
         )
         log_audit(self.memory, "task_event", event.__dict__, redact=getattr(self, "redact_logs", False))
+        try:
+            trace_id = (extra or {}).get("trace_id") or ""
+            if self.langfuse and trace_id:
+                self.langfuse.log_event(trace_id, event_type, data)
+        except Exception:
+            pass
 
     def log_line(self, message):
         ts = datetime.now().strftime("%H:%M:%S")
