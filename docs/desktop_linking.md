@@ -187,6 +187,28 @@ From this machine:
 \\10.0.0.124\Share
 ```
 
+## Option: Always-On A2A Bridge (no manual involvement)
+This makes the two CLIs “talk” once started. You only start the app on each machine.
+
+**Set these in `.env` on BOTH machines:**
+```
+AGENTIC_A2A_LISTEN=true
+AGENTIC_A2A_HOST=0.0.0.0
+AGENTIC_A2A_PORT=9451
+AGENTIC_A2A_SHARED_SECRET=change_me
+AGENTIC_A2A_PEERS=desktop=100.111.161.110:9451,work=100.98.190.75:9451
+AGENTIC_NODE_NAME=work
+```
+On the desktop, set `AGENTIC_NODE_NAME=desktop`.
+
+**Usage (from either CLI):**
+```
+a2a_peers
+a2a_send desktop hello-from-work
+a2a_broadcast system-started
+```
+Messages arrive in the other node’s A2A log and are stored in SQLite.
+
 ## Status
 ### codex-work (this machine) — completed setup
 - Tailscale installed and logged in.

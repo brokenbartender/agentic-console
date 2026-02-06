@@ -65,6 +65,7 @@ from policy import requires_confirmation
 from job_store import JobStore
 from team import TeamOrchestrator, AgentRole
 from a2a import A2ABus
+from a2a_network import A2ANetwork
 from mcp_adapter import MCPAdapter
 from privacy import redact_text
 from core.logging_api import log_audit
@@ -294,6 +295,7 @@ class AgentApp:
         self.settings = settings
 
         self.memory = memory
+        self.node_name = self.settings.node_name
 
         self.metrics = Metrics()
 
@@ -318,6 +320,19 @@ class AgentApp:
         self.research = ResearchStore(self.memory._conn)
         self.jobs = JobStore(self.memory._conn)
         self.a2a = A2ABus(self.memory)
+        self.a2a_net = A2ANetwork(
+            self.a2a,
+            self.settings.a2a_host,
+            self.settings.a2a_port,
+            self.settings.a2a_shared_secret,
+            self.settings.a2a_peers,
+        )
+        if str(self.settings.a2a_listen).lower() in ("1", "true", "yes", "on"):
+            try:
+                self.a2a_net.start()
+                self.log_line(f"A2A network listening on http://{self.settings.a2a_host}:{self.settings.a2a_port}/a2a")
+            except Exception:
+                self.log_line("A2A network failed to start.")
         self.mcp = MCPAdapter()
         self.slow_mode = False
         self.dot_mode = False
@@ -1758,6 +1773,33 @@ class AgentApp:
             self.log_line("Lab note saved.")
             return
 
+        if lowered.startswith("a2a_send "):
+            payload = step[len("a2a_send "):].strip()
+            if not payload or " " not in payload:
+                raise RuntimeError("a2a_send requires: a2a_send <peer> <message>")
+            peer, message = payload.split(" ", 1)
+            sender = getattr(self, "node_name", "work")
+            self.a2a_net.send(peer.strip(), sender, "remote", message.strip())
+            self.log_line(f"A2A sent to {peer}.")
+            return
+
+        if lowered.startswith("a2a_broadcast "):
+            message = step[len("a2a_broadcast "):].strip()
+            if not message:
+                raise RuntimeError("a2a_broadcast requires: a2a_broadcast <message>")
+            sender = getattr(self, "node_name", "work")
+            self.a2a_net.broadcast(sender, "remote", message.strip())
+            self.log_line("A2A broadcast sent.")
+            return
+
+        if lowered == "a2a_peers":
+            if not self.a2a_net.peers:
+                self.log_line("No A2A peers configured.")
+                return
+            lines = [f"{name} -> {host}:{port}" for name, (host, port) in self.a2a_net.peers.items()]
+            self.log_line("\n".join(lines))
+            return
+
         if lowered.startswith("red_team "):
             scenario = step[len("red_team "):].strip()
             prompt = ("You are a red-team evaluator. Identify misuse risks, "
@@ -2128,6 +2170,10 @@ class AgentApp:
         try:
 
             self._memory_prune_stop.set()
+            try:
+                self.a2a_net.stop()
+            except Exception:
+                pass
             if self.page:
 
                 self.page.close()

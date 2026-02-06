@@ -69,6 +69,12 @@ class Settings:
     max_tool_calls_per_task: int = int(_env("AGENTIC_MAX_TOOL_CALLS", "50"))
     oi_mode: str = _env("AGENTIC_OI_MODE", "text_only")
     replay_mode: str = _env("AGENTIC_REPLAY_MODE", "false")
+    a2a_listen: str = _env("AGENTIC_A2A_LISTEN", "true")
+    a2a_host: str = _env("AGENTIC_A2A_HOST", "0.0.0.0")
+    a2a_port: int = int(_env("AGENTIC_A2A_PORT", "9451"))
+    a2a_shared_secret: str = _env("AGENTIC_A2A_SHARED_SECRET", "")
+    a2a_peers: str = _env("AGENTIC_A2A_PEERS", "")
+    node_name: str = _env("AGENTIC_NODE_NAME", "work")
 
 
 def get_settings() -> Settings:
