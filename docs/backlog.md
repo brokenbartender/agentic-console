@@ -72,3 +72,24 @@ Scores are 1-10. Higher impact = more benefit. Higher effort/risk = more cost.
 - Risk: 7
 - Notes: Treat emotional variables as telemetry first, not control drivers.
 - Priority: P3
+
+## UI Feature Backlog (Pro Chat + Control Plane)
+1. Editable Config Sheet (Shadcn-style)
+- Priority: P1
+- Notes: Add POST /api/config to update settings; include validation + restart toggle.
+
+2. NiceGUI Floating Companion: Always-on-top + Activity Pulse
+- Priority: P1
+- Notes: Add window flags for always-on-top, pulse indicator on task run.
+
+3. Terminal Stream: Full stdout/stderr
+- Priority: P1
+- Notes: Stream sandbox_run output line-by-line into UI.
+
+4. Sources Cards: Favicon + file link cards
+- Priority: P2
+- Notes: Render RAG sources as rich cards with path/preview.
+
+5. Graph View: True pan/zoom + node drag
+- Priority: P2
+- Notes: Upgrade SVG to canvas interactions.
