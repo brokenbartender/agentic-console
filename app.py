@@ -710,6 +710,17 @@ class AgentApp:
             handle.write(text.strip() + "\n\n")
 
     def _on_a2a_message(self, sender: str, receiver: str, message: str) -> None:
+        # Persist inbound A2A to memory for self-improvement and recall
+        try:
+            content = f"{sender} -> {receiver}: {message}"
+            self.memory.add_memory(
+                kind="a2a",
+                content=content,
+                tags=[sender, receiver, "a2a"],
+                scope="shared",
+            )
+        except Exception:
+            pass
         if str(self.settings.a2a_auto_reply).lower() not in ("1", "true", "yes", "on"):
             return
         if sender == getattr(self, "node_name", "work"):
