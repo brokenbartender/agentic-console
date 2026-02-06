@@ -164,6 +164,18 @@ From this machine:
 ```
 
 ## Status
-- Tailscale: installed and logged in on both machines.
-- SSH: pending until CODYDESKTOP runs Step 1.
+### codex-work (this machine) — completed setup
+- Tailscale installed and logged in.
+- Tailscale IP: `100.98.190.75`
+- SSH keypair created: `C:\Users\codym\.ssh\codydesktop` / `codydesktop.pub`
+- SSH aliases configured:
+  - `codydesktop` host entry in `~\.ssh\config`
+  - PowerShell functions: `desk`, `work`, `deskcopy`
+
+### CODYDESKTOP — required actions to finish linking
+Run the **Admin Key Auth Fix** block above, then add the current public key.
+After that, from codex-work, test:
+```powershell
+ssh -i $env:USERPROFILE\.ssh\codydesktop codym@100.111.161.110
+```
 
