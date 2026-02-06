@@ -27,6 +27,7 @@ import logging
 import hashlib
 import platform
 import sys
+import asyncio
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
@@ -34,7 +35,7 @@ from typing import List, Dict, Optional
 
 from config import get_settings
 
-from memory import MemoryStore
+from engine import AgentEngine
 
 from logger import setup_logging
 
@@ -48,7 +49,6 @@ from executor.execute import execute_tool
 
 from agents import PlannerAgent, RetrieverAgent, ExecutorAgent, VerifierAgent
 
-from rag import RagStore
 
 from calibration import confidence_from_evidence
 
@@ -57,17 +57,13 @@ from deep_research import DeepResearch
 from multimodal import ocr_pdf, capture_screenshot
 from audio_io import record_and_transcribe, speak_text
 from cognitive import slow_mode, dot_ensemble
-from graph_rag import GraphStore
 from workflows import run_workflow
 from perception import collect_observation
 
 from router import choose_model
 
 from policy import requires_confirmation
-from job_store import JobStore
 from team import TeamOrchestrator, AgentRole
-from a2a import A2ABus
-from a2a_network import A2ANetwork
 from mcp_adapter import MCPAdapter
 from privacy import redact_text
 from core.logging_api import log_audit
@@ -94,7 +90,6 @@ from micro_saas_tools import (
     load_assumptions,
     dump_assumptions,
 )
-from research_store import ResearchStore
 from safety import screen_text
 from sandbox import run_python
 from automotive_agents import (
@@ -284,7 +279,7 @@ APP_TITLE = "Agentic Console"
 
 class AgentApp:
 
-    def __init__(self, root, settings, memory):
+    def __init__(self, root, settings, engine: AgentEngine):
 
         self.root = root
 
@@ -295,14 +290,13 @@ class AgentApp:
 
 
         self.settings = settings
-
-        self.memory = memory
+        self.engine = engine
+        self.memory = engine.memory
         self.node_name = self.settings.node_name
         self.a2a_pause_path = os.path.join(self.settings.data_dir, "a2a_bridge_pause.json")
 
-        self.metrics = Metrics()
-
-        self.task_queue = TaskQueue(settings.task_queue_size)
+        self.metrics = engine.metrics
+        self.task_queue = engine.task_queue
 
 
 
@@ -318,30 +312,22 @@ class AgentApp:
 
         self.tools = ToolRegistry(self)
 
-        self.rag = RagStore(self.memory)
-        self.graph = GraphStore(self.memory._conn)
-        self.research = ResearchStore(self.memory._conn)
-        self.jobs = JobStore(self.memory._conn)
-        self.a2a = A2ABus(self.memory)
-        self.a2a_net = A2ANetwork(
-            self.a2a,
-            self.settings.a2a_host,
-            self.settings.a2a_port,
-            self.settings.a2a_shared_secret,
-            self.settings.a2a_peers,
-            on_message=self._on_a2a_message,
-        )
-        if str(self.settings.a2a_listen).lower() in ("1", "true", "yes", "on"):
-            try:
-                self.a2a_net.start()
-                self.log_line(f"A2A network listening on http://{self.settings.a2a_host}:{self.settings.a2a_port}/a2a")
-            except Exception:
-                self.log_line("A2A network failed to start.")
+        self.rag = engine.rag
+        self.graph = engine.graph
+        self.research = engine.research
+        self.jobs = engine.jobs
+        self.a2a = engine.a2a
+        self.a2a_net = engine.a2a_net
+        self.a2a_net.on_message = self._on_a2a_message
+        self.engine.start_a2a()
         self.mcp = MCPAdapter()
         self.slow_mode = False
         self.dot_mode = False
         self._memory_prune_stop = threading.Event()
         self._start_memory_prune_loop()
+        self._a2a_async_enabled = os.getenv("AGENTIC_A2A_ASYNC", "false").lower() in ("1", "true", "yes", "on")
+        if self._a2a_async_enabled:
+            self._start_a2a_async_loop()
 
 
         tool_prefixes = list(self.tools.tools.keys())
@@ -358,6 +344,12 @@ class AgentApp:
         tool_prefixes.append("mcp_resources")
         tool_prefixes.append("mcp_prompts")
         tool_prefixes.append("mcp_tools")
+
+        # Capabilities handshake (dynamic discovery)
+        try:
+            self._send_capabilities()
+        except Exception:
+            pass
         tool_prefixes.append("data_profile")
         tool_prefixes.append("ai_interface")
         tool_prefixes.append("rag_sources")
@@ -711,6 +703,32 @@ class AgentApp:
         self._update_a2a_status()
         self.root.after(2000, self._a2a_refresh)
 
+    def _send_capabilities(self) -> None:
+        tools = sorted(list(self.tools.tools.keys()))
+        payload = {
+            "type": "capabilities",
+            "tools": tools,
+            "node": getattr(self, "node_name", "unknown"),
+            "version": APP_VERSION,
+        }
+        for peer in self.a2a_net.peers:
+            try:
+                self.a2a_net.send(peer, getattr(self, "node_name", "work"), "remote", payload)
+            except Exception:
+                continue
+
+    def _broadcast_memory_sync(self, item: dict) -> None:
+        payload = {
+            "type": "memory_sync",
+            "item": item,
+            "node": getattr(self, "node_name", "unknown"),
+        }
+        for peer in self.a2a_net.peers:
+            try:
+                self.a2a_net.send(peer, getattr(self, "node_name", "work"), "remote", payload)
+            except Exception:
+                continue
+
 
 
     def _maybe_redact(self, text: str) -> str:
@@ -777,6 +795,26 @@ class AgentApp:
         self.step_approval_enabled = bool(self.step_approval_var.get())
         msg = "Step approvals enabled." if self.step_approval_enabled else "Step approvals disabled."
         self.log_line(msg)
+
+    def _start_a2a_async_loop(self) -> None:
+        self._a2a_async_queue = asyncio.Queue()
+
+        async def _worker():
+            while True:
+                sender, receiver, message = await self._a2a_async_queue.get()
+                try:
+                    await asyncio.to_thread(self._on_a2a_message_impl, sender, receiver, message)
+                except Exception:
+                    pass
+
+        def _run():
+            try:
+                asyncio.run(_worker())
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
 
     def stop_run(self) -> None:
         self.stop_event.set()
@@ -889,6 +927,10 @@ class AgentApp:
                     ttl_seconds=7 * 24 * 3600,
                     scope="shared",
                 )
+                try:
+                    self._broadcast_memory_sync({"kind": "a2a_thread_summary", "content": f"{key}: {summary}"})
+                except Exception:
+                    pass
                 entry["count_since_memory"] = 0
                 data[key] = entry
                 with open(path, "w", encoding="utf-8") as handle:
@@ -897,6 +939,17 @@ class AgentApp:
                 return
 
     def _on_a2a_message(self, sender: str, receiver: str, message: str) -> None:
+        if getattr(self, "_a2a_async_enabled", False):
+            try:
+                if not hasattr(self, "_a2a_async_queue"):
+                    return
+                self._a2a_async_queue.put_nowait((sender, receiver, message))
+                return
+            except Exception:
+                pass
+        self._on_a2a_message_impl(sender, receiver, message)
+
+    def _on_a2a_message_impl(self, sender: str, receiver: str, message: str) -> None:
         # Ensure summary file exists for downstream tooling even if other hooks fail.
         try:
             path = os.path.join(self.settings.data_dir, "a2a_thread_summaries.json")
@@ -957,6 +1010,36 @@ class AgentApp:
                     trace_id = payload.get("trace_id")
                     thread_id = payload.get("thread_id")
                     message_id = payload.get("message_id")
+                    if msg_type == "memory_sync":
+                        try:
+                            item = payload.get("item") or {}
+                            kind = item.get("kind") or "memory_sync"
+                            content = item.get("content") or json.dumps(item)
+                            self.memory.add_memory(
+                                kind=kind,
+                                content=content,
+                                tags=["memory_sync", sender],
+                                scope="shared",
+                            )
+                            self.log_line(f"Memory sync received from {sender}.")
+                        except Exception:
+                            pass
+                        return
+                    if msg_type == "capabilities":
+                        try:
+                            tools = payload.get("tools") or []
+                            node = payload.get("node") or sender
+                            content = f"{node} capabilities: {', '.join(tools)}"
+                            self.memory.add_memory(
+                                kind="capabilities",
+                                content=content,
+                                tags=[node, "capabilities"],
+                                scope="shared",
+                            )
+                            self.log_line(f"A2A capabilities received from {node}.")
+                        except Exception:
+                            pass
+                        return
 
                 # Simple prefix overrides
                 lowered = msg_text.lower().strip()
@@ -1106,6 +1189,30 @@ class AgentApp:
         return PlanStep(step=idx, action=action, target=target, value=value, reason=reason, command=command)
 
     def _build_plan(self, cmd: str) -> List[PlanStep]:
+        # Prefer recipes if available
+        try:
+            hits = self.memory.search_memory(cmd, limit=1)
+            if hits:
+                top = hits[0]
+                if top.get("kind") == "recipe":
+                    payload = json.loads(top.get("content") or "{}")
+                    steps_raw = payload.get("steps") or []
+                    steps: List[PlanStep] = []
+                    for idx, s in enumerate(steps_raw, 1):
+                        steps.append(
+                            PlanStep(
+                                step=idx,
+                                action=s.get("action", "agent"),
+                                target=s.get("target", ""),
+                                value=s.get("value", ""),
+                                reason=s.get("reason", ""),
+                                command=s.get("command", s.get("target", "")),
+                            )
+                        )
+                    if steps:
+                        return steps
+        except Exception:
+            pass
         plan = self.planner.plan(cmd)
         if not plan:
             plan = [cmd]
@@ -1333,6 +1440,30 @@ class AgentApp:
         hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time())
         log_audit(self.memory, "run_heartbeat", hb.__dict__, redact=getattr(self, "redact_logs", False))
         self._write_summary(run)
+        if run.status == OrchestratorState.COMPLETE.value:
+            try:
+                recipe = {
+                    "intent": run.intent,
+                    "steps": [
+                        {
+                            "step": s.step,
+                            "action": s.action,
+                            "target": s.target,
+                            "value": s.value,
+                            "reason": s.reason,
+                            "command": s.command,
+                        }
+                        for s in run.plan_steps
+                    ],
+                }
+                self.memory.add_memory(
+                    kind="recipe",
+                    content=json.dumps(recipe),
+                    tags=["recipe", "taskrun"],
+                    scope="shared",
+                )
+            except Exception:
+                pass
         self.log_line(f"Proof pack saved to: {run.run_dir}")
 
 
@@ -1753,6 +1884,18 @@ class AgentApp:
     def _execute_step(self, step: str):
 
         lowered = step.strip().lower()
+
+        if lowered.startswith("delegate:"):
+            rest = step.split(":", 1)[1].strip()
+            parts = rest.split(" ", 1)
+            if len(parts) < 2:
+                raise RuntimeError("delegate requires: delegate:<peer> <task>")
+            peer = parts[0].strip()
+            task = parts[1].strip()
+            payload = {"type": "plan", "text": task}
+            self.a2a_net.send(peer, getattr(self, "node_name", "work"), "remote", payload)
+            self.log_line(f"Delegated to {peer}: {task}")
+            return
 
         if lowered.startswith("simulate "):
             payload = step[len("simulate "):].strip()
@@ -3375,10 +3518,8 @@ def main():
     setup_logging(settings.log_file)
 
     root = tk.Tk()
-
-    memory = MemoryStore(settings.memory_db, settings.embedding_dim)
-
-    app = AgentApp(root, settings, memory)
+    engine = AgentEngine(settings)
+    app = AgentApp(root, settings, engine)
 
     _start_web_server(app)
 

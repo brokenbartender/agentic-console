@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from typing import List
@@ -12,6 +12,18 @@ class PlannerAgent:
         lowered = instruction.strip().lower()
         if lowered.startswith(self.tool_prefixes):
             return [instruction]
+
+        # Delegate patterns
+        m = re.search(r"delegate\s+to\s+(\w+)\s*:\s*(.+)", instruction, flags=re.IGNORECASE)
+        if not m:
+            m = re.search(r"delegate\s+(\w+)\s*:\s*(.+)", instruction, flags=re.IGNORECASE)
+        if not m:
+            m = re.search(r"\[delegate:(\w+)\]\s*(.+)", instruction, flags=re.IGNORECASE)
+        if m:
+            peer = m.group(1).strip()
+            task = m.group(2).strip()
+            return [f"delegate:{peer} {task}"]
+
         if " and " in lowered or " then " in lowered:
             parts = re.split(r"\bthen\b|\band\b", instruction, flags=re.IGNORECASE)
             steps = [p.strip() for p in parts if p.strip()]

@@ -80,6 +80,12 @@ Message formats supported:
   "reply_to": "uuid"
 }
 ```
+
+## Async A2A Processing
+Enable asyncio-based inbound processing:
+```
+AGENTIC_A2A_ASYNC=true
+```
 ## Auto-Update
 To keep the desktop/laptop in sync without manual pulls, use:
 
