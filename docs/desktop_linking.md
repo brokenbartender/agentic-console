@@ -111,6 +111,15 @@ If it fails, capture the exact error text and re-check:
 - The file ACLs allow only `Administrators` and `SYSTEM`
 - `sshd` is running and port 22 is listening
 
+## Desktop-side verification (run on CODYDESKTOP)
+If the codex-work test fails, run these checks on the desktop:
+```powershell
+Get-Content -Path C:\ProgramData\ssh\administrators_authorized_keys | Select-String -Pattern 'codym@Work'
+icacls C:\ProgramData\ssh\administrators_authorized_keys
+Get-Service sshd | Select-Object -Property Status,Name,StartType
+Get-NetTCPConnection -LocalPort 22 -State Listen | Select-Object -First 2
+```
+
 ## Codex-Work Next Steps (run on codex-work)
 These steps are for the Codex AI session on the work machine.
 1. Ensure the key exists (generate if missing):
