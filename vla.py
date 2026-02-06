@@ -14,6 +14,11 @@ except Exception:
     pyautogui = None
 
 try:
+    import keyboard
+except Exception:
+    keyboard = None
+
+try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
@@ -187,6 +192,7 @@ class LiveDriver:
             "stop",
         ]
         read_only = _parse_bool(os.getenv("AGENTIC_VLA_READONLY", "true"), True)
+        pause_key = os.getenv("AGENTIC_VLA_PAUSE_KEY", "f9").strip().lower()
         pause_file = os.path.join(self.data_dir, "vla.pause")
         stop_file = os.path.join(self.data_dir, "vla.stop")
         os.makedirs(os.path.join(self.data_dir, "vla"), exist_ok=True)
@@ -195,6 +201,15 @@ class LiveDriver:
             if self.state.paused or self.app.pause_event.is_set():
                 time.sleep(0.5)
                 continue
+            if keyboard and pause_key:
+                try:
+                    if keyboard.is_pressed(pause_key):
+                        self.app.log_line(f"VLA paused via hotkey {pause_key}.")
+                        self.state.paused = True
+                        time.sleep(0.5)
+                        continue
+                except Exception:
+                    pass
             if os.path.exists(stop_file):
                 try:
                     os.remove(stop_file)
@@ -321,4 +336,3 @@ class LiveDriver:
             if isinstance(keys, list) and keys:
                 pyautogui.hotkey(*[str(k) for k in keys])
             return
-

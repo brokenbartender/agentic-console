@@ -28,6 +28,7 @@ AGENTIC_VLA_INTERVAL=1.0
 AGENTIC_VLA_GRID=6
 AGENTIC_VLA_READONLY=true
 AGENTIC_VLA_ACTIONS=click,scroll,wait,stop
+AGENTIC_VLA_PAUSE_KEY=f9
 ```
 Commands: `vla start|stop|pause|resume|goal <text>|status`.
 
