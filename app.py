@@ -591,8 +591,10 @@ class AgentApp:
 
         console_tab = ttk.Frame(self.left_notebook)
         a2a_tab = ttk.Frame(self.left_notebook)
+        terminal_tab = ttk.Frame(self.left_notebook)
         self.left_notebook.add(console_tab, text="Console")
         self.left_notebook.add(a2a_tab, text="A2A Control")
+        self.left_notebook.add(terminal_tab, text="Terminal")
 
         self.log = tk.Text(console_tab, wrap=tk.WORD)
         self.log.pack(fill=tk.BOTH, expand=True)
@@ -600,6 +602,7 @@ class AgentApp:
         self.log.configure(state=tk.DISABLED)
 
         self._build_a2a_tab(a2a_tab)
+        self._build_terminal_tab(terminal_tab)
 
         ttk.Label(right, text="Plan (Intent → Plan → Proof)").pack(anchor="w")
         self.plan_text = tk.Text(right, height=10, wrap=tk.WORD)
@@ -750,6 +753,94 @@ class AgentApp:
         self.a2a_text.configure(state=tk.DISABLED)
         self._update_a2a_status()
         self.root.after(2000, self._a2a_refresh)
+
+    def _build_terminal_tab(self, parent) -> None:
+        self._terminal_process = None
+        self._terminal_queue = queue.Queue()
+
+        status_row = ttk.Frame(parent)
+        status_row.pack(fill=tk.X, pady=4)
+        self.term_status_var = tk.StringVar(value="idle")
+        ttk.Label(status_row, text="Status:").pack(side=tk.LEFT, padx=2)
+        ttk.Label(status_row, textvariable=self.term_status_var).pack(side=tk.LEFT, padx=4)
+
+        self.term_text = tk.Text(parent, wrap=tk.WORD, height=18)
+        self.term_text.pack(fill=tk.BOTH, expand=True, padx=2, pady=4)
+        self.term_text.configure(state=tk.DISABLED)
+
+        input_row = ttk.Frame(parent)
+        input_row.pack(fill=tk.X, pady=4)
+        self.term_input_var = tk.StringVar()
+        entry = ttk.Entry(input_row, textvariable=self.term_input_var)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        entry.bind("<Return>", lambda _e: self._terminal_run())
+        ttk.Button(input_row, text="Run", command=self._terminal_run).pack(side=tk.LEFT, padx=2)
+        ttk.Button(input_row, text="Kill", command=self._terminal_kill).pack(side=tk.LEFT, padx=2)
+        ttk.Button(input_row, text="Clear", command=self._terminal_clear).pack(side=tk.LEFT, padx=2)
+
+        hint = ttk.Label(parent, text="Example: codex danger-full-access", foreground="#666")
+        hint.pack(anchor=tk.W, padx=4, pady=2)
+
+        self.root.after(200, self._terminal_pump)
+
+    def _terminal_clear(self) -> None:
+        self.term_text.configure(state=tk.NORMAL)
+        self.term_text.delete("1.0", tk.END)
+        self.term_text.configure(state=tk.DISABLED)
+
+    def _terminal_kill(self) -> None:
+        proc = getattr(self, "_terminal_process", None)
+        if proc:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        self._terminal_process = None
+        self.term_status_var.set("idle")
+
+    def _terminal_run(self) -> None:
+        cmd = (self.term_input_var.get() or "").strip()
+        if not cmd:
+            return
+        self.term_input_var.set("")
+        if getattr(self, "_terminal_process", None):
+            self._terminal_queue.put("\n[terminal] process already running. Kill it first.\n")
+            return
+        self.term_status_var.set("running")
+
+        def _worker():
+            try:
+                proc = subprocess.Popen(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                self._terminal_process = proc
+                if proc.stdout:
+                    for line in proc.stdout:
+                        self._terminal_queue.put(line)
+                proc.wait()
+            except Exception as exc:
+                self._terminal_queue.put(f"[terminal error] {exc}\n")
+            finally:
+                self._terminal_process = None
+                self.term_status_var.set("idle")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _terminal_pump(self) -> None:
+        try:
+            while True:
+                line = self._terminal_queue.get_nowait()
+                self.term_text.configure(state=tk.NORMAL)
+                self.term_text.insert(tk.END, line)
+                self.term_text.see(tk.END)
+                self.term_text.configure(state=tk.DISABLED)
+        except Exception:
+            pass
+        self.root.after(200, self._terminal_pump)
 
     def _debate_step(self, step: str) -> bool:
         try:
