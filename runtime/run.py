@@ -61,6 +61,10 @@ def cmd_workflow(args) -> None:
         output = ctrl.run_workflow(args.path, args.goal or "")
         print(output)
         return
+    if args.sub == "create":
+        output = ctrl.save_workflow(args.name)
+        print(output)
+        return
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,6 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
     runwf = wf_sub.add_parser("run")
     runwf.add_argument("path")
     runwf.add_argument("--goal")
+    createwf = wf_sub.add_parser("create")
+    createwf.add_argument("name")
     wf.set_defaults(func=cmd_workflow)
 
     return parser

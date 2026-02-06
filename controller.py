@@ -389,6 +389,20 @@ class HeadlessController:
         except Exception as exc:
             return f"workflow error: {exc}"
 
+    def save_workflow(self, name: str) -> str:
+        run = self.current_run
+        if not run or not getattr(run, "actions_path", ""):
+            return "No run actions to save."
+        wf_dir = os.path.join(os.getcwd(), "workflows")
+        os.makedirs(wf_dir, exist_ok=True)
+        target = os.path.join(wf_dir, f"{name}.jsonl")
+        try:
+            with open(run.actions_path, "r", encoding="utf-8") as src, open(target, "w", encoding="utf-8") as dst:
+                dst.write(src.read())
+            return f"Saved workflow {target}"
+        except Exception as exc:
+            return f"workflow save error: {exc}"
+
     def set_step_approval(self, enabled: bool) -> None:
         self.app.step_approval_enabled = bool(enabled)
         try:

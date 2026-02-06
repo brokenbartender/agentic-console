@@ -55,6 +55,9 @@ def main_dashboard():
                     exec_container = ui.column().classes("w-full gap-2")
                     with ui.row().classes("w-full mt-4 justify-end hidden") as approval_row:
                         ui.button("Reject", color="red", icon="close").props("outline")
+                        ui.button("Approve Once", on_click=lambda: run_task("approve_once")).props("flat color=primary")
+                        ui.button("Always Allow", on_click=lambda: run_task("approve_always")).props("flat color=primary")
+                        ui.button("Never Allow", on_click=lambda: run_task("approve_never")).props("flat color=red")
                         approve_btn = ui.button("APPROVE RUN", color="green", icon="check")
                     with ui.row().classes("w-full mt-2 gap-2"):
                         ui.switch("Approve Writes", value=False, on_change=lambda e: ctrl.set_step_approval(e.value))

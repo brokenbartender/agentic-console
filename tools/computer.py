@@ -17,6 +17,7 @@ class ComputerObservation:
     uia_path: Optional[str]
     active_window: str
     cursor: Dict[str, int]
+    screenshot_size: int
 
 
 class ComputerController:
@@ -34,12 +35,18 @@ class ComputerController:
             write_snapshot(uia_path)
         except Exception:
             uia_path = None
+        screenshot_size = 0
+        try:
+            screenshot_size = os.path.getsize(screenshot_path)
+        except Exception:
+            screenshot_size = 0
         return ComputerObservation(
             timestamp=time.time(),
             screenshot_path=screenshot_path,
             uia_path=uia_path,
             active_window="",
             cursor={"x": 0, "y": 0},
+            screenshot_size=screenshot_size,
         )
 
     def act(self, action: str, params: Dict[str, Any]) -> str:
@@ -76,6 +83,7 @@ class ComputerController:
                 "uia": obs.uia_path,
                 "active_window": obs.active_window,
                 "cursor": obs.cursor,
+                "screenshot_size": obs.screenshot_size,
             }
         if mode == "act":
             action = payload.get("action") or ""

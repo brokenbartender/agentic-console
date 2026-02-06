@@ -2289,16 +2289,22 @@ class AgentApp:
                     report.status = "failed"
                     report.failure_reason = "Budget exceeded: max_tool_calls"
                     break
-            if step.requires_confirmation and self.step_approval_enabled:
-                self._log_event(
-                    "tool_call_blocked",
-                    {"tool": step.tool, "args": step.args},
-                    extra={"step_id": step.step_id},
-                )
-                self.memory.set("pending_action", json.dumps({"type": "tool", "name": step.tool, "args": step.args.get("raw", "")}))
-                report.status = "needs_input"
-                step_rep.status = "skipped"
-                break
+            if step.requires_confirmation:
+                if self.memory.get(f"deny_tool:{step.tool}") == "true":
+                    report.status = "needs_input"
+                    step_rep.status = "skipped"
+                    report.failure_reason = f"Tool {step.tool} blocked by policy"
+                    break
+                if self.memory.get(f"allow_tool:{step.tool}") != "true" and self.step_approval_enabled:
+                    self._log_event(
+                        "tool_call_blocked",
+                        {"tool": step.tool, "args": step.args},
+                        extra={"step_id": step.step_id},
+                    )
+                    self.memory.set("pending_action", json.dumps({"type": "tool", "name": step.tool, "args": step.args.get("raw", "")}))
+                    report.status = "needs_input"
+                    step_rep.status = "skipped"
+                    break
             ok = False
             for attempt in range(1, step.max_attempts + 1):
                 step_rep.attempts = attempt
@@ -3210,7 +3216,8 @@ class AgentApp:
 
     def _orchestrate(self, instruction):
 
-        if instruction.strip().lower() == "confirm":
+        lowered_instr = instruction.strip().lower()
+        if lowered_instr in ("confirm", "approve_once", "approve_always", "approve_never"):
 
             pending = self.memory.get("pending_action")
 
@@ -3228,6 +3235,11 @@ class AgentApp:
 
                 args = payload.get("args")
 
+                if lowered_instr == "approve_always" and name:
+                    self.memory.set(f"allow_tool:{name}", "true")
+                if lowered_instr == "approve_never" and name:
+                    self.memory.set(f"deny_tool:{name}", "true")
+                    return f"Denied tool {name}."
                 out = self._execute_tool(name, args, confirm=True)
 
                 return out
