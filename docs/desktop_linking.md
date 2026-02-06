@@ -81,6 +81,26 @@ Restart-Service sshd
    ssh -i $env:USERPROFILE\.ssh\codydesktop codym@100.111.161.110
    ```
 
+## Windows Admin Account Key Auth Fix
+If your user is in the local Administrators group, OpenSSH on Windows ignores `C:\Users\<you>\.ssh\authorized_keys` and instead uses:
+`C:\ProgramData\ssh\administrators_authorized_keys`
+
+Ensure the file exists and permissions are locked down:
+```powershell
+New-Item -ItemType File -Path C:\ProgramData\ssh\administrators_authorized_keys -Force
+icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r
+icacls C:\ProgramData\ssh\administrators_authorized_keys /grant "Administrators:F"
+icacls C:\ProgramData\ssh\administrators_authorized_keys /grant "SYSTEM:F"
+```
+Then append your public key to that file (from codex-work):
+```powershell
+type $env:USERPROFILE\.ssh\codydesktop.pub | ssh codym@100.111.161.110 "powershell -Command \"Add-Content -Path C:\ProgramData\ssh\administrators_authorized_keys -Value (Get-Content -Raw)\""
+```
+Restart SSH after edits:
+```powershell
+Restart-Service sshd
+```
+
 ## Step 3: Add SSH aliases (this machine)
 Your SSH config:
 ```
