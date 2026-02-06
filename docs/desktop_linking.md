@@ -27,6 +27,21 @@ When prompted:
 - Type `yes` to trust the host key.
 - Enter your Windows password for `codym` on CODYDESKTOP.
 
+## If SSH says “Permission denied”
+On CODYDESKTOP (Admin PowerShell):
+```powershell
+notepad "C:\ProgramData\ssh\sshd_config"
+```
+Ensure these lines exist (add if missing):
+```
+PasswordAuthentication yes
+PubkeyAuthentication yes
+```
+Save, then restart SSH:
+```powershell
+Restart-Service sshd
+```
+
 ## Step 3: Add SSH aliases (this machine)
 Your SSH config:
 ```
