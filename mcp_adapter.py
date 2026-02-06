@@ -13,11 +13,18 @@ class MCPAdapter:
             "github": os.getenv("MCP_GITHUB_URL", ""),
             "drive": os.getenv("MCP_DRIVE_URL", ""),
         }
+        self.remote_endpoints.update(self._parse_endpoints(os.getenv("MCP_ENDPOINTS", "")))
         self.github_token = os.getenv("GITHUB_TOKEN", "")
         self.drive_token = os.getenv("GOOGLE_DRIVE_TOKEN", "")
 
     def register(self, name: str, provider) -> None:
         self.providers[name] = provider
+
+    def list_providers(self) -> Dict[str, Any]:
+        names = set(self.providers.keys())
+        names.update({k for k, v in self.remote_endpoints.items() if v})
+        names.update(["github", "drive"])
+        return {"providers": sorted(names)}
 
     def call(self, name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         if name in self.providers:
@@ -43,6 +50,18 @@ class MCPAdapter:
         resp = requests.post(url, json=payload, timeout=30)
         resp.raise_for_status()
         return resp.json()
+
+    def _parse_endpoints(self, raw: str) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        if not raw:
+            return out
+        for item in raw.split(","):
+            item = item.strip()
+            if not item or "=" not in item:
+                continue
+            name, url = item.split("=", 1)
+            out[name.strip()] = url.strip()
+        return out
 
     def _call_github(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not self.github_token:

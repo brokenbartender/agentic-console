@@ -56,6 +56,7 @@ from deep_research import DeepResearch
 
 from multimodal import ocr_pdf, capture_screenshot
 from audio_io import record_and_transcribe, speak_text
+from cost import estimate_tokens
 from cognitive import slow_mode, dot_ensemble
 from workflows import run_workflow
 from perception import collect_observation
@@ -65,6 +66,7 @@ from router import choose_model
 from policy import requires_confirmation
 from team import TeamOrchestrator, AgentRole
 from mcp_adapter import MCPAdapter
+from lsp_tools import find_symbol_def, find_inherits
 from privacy import redact_text
 from core.logging_api import log_audit
 from core.schemas import ToolCall, TaskEvent, RunHeartbeat
@@ -328,6 +330,21 @@ class AgentApp:
         self._a2a_async_enabled = os.getenv("AGENTIC_A2A_ASYNC", "false").lower() in ("1", "true", "yes", "on")
         if self._a2a_async_enabled:
             self._start_a2a_async_loop()
+        self._dreaming_enabled = os.getenv("AGENTIC_DREAMING", "false").lower() in ("1", "true", "yes", "on")
+        self._world_loop_enabled = os.getenv("AGENTIC_WORLD_LOOP", "false").lower() in ("1", "true", "yes", "on")
+        self._cfo_enabled = os.getenv("AGENTIC_CFO", "false").lower() in ("1", "true", "yes", "on")
+        self._vision_enabled = os.getenv("AGENTIC_VISION_LOOP", "false").lower() in ("1", "true", "yes", "on")
+        self._jarvis_enabled = os.getenv("AGENTIC_JARVIS", "false").lower() in ("1", "true", "yes", "on")
+        if self._dreaming_enabled:
+            self._start_dreaming_loop()
+        if self._world_loop_enabled:
+            self._start_world_loop()
+        if self._cfo_enabled:
+            self._start_cfo_loop()
+        if self._vision_enabled:
+            self._start_vision_loop()
+        if self._jarvis_enabled:
+            self._start_jarvis_loop()
 
 
         tool_prefixes = list(self.tools.tools.keys())
@@ -344,6 +361,9 @@ class AgentApp:
         tool_prefixes.append("mcp_resources")
         tool_prefixes.append("mcp_prompts")
         tool_prefixes.append("mcp_tools")
+        tool_prefixes.append("mcp_providers")
+        tool_prefixes.append("lsp_find")
+        tool_prefixes.append("lsp_inherits")
 
         # Capabilities handshake (dynamic discovery)
         try:
@@ -703,6 +723,18 @@ class AgentApp:
         self._update_a2a_status()
         self.root.after(2000, self._a2a_refresh)
 
+    def _debate_step(self, step: str) -> bool:
+        try:
+            pro = self._agent_chat(f"Argue FOR executing this step safely: {step}")
+            con = self._agent_chat(f"Argue AGAINST executing this step: {step}")
+            verdict = self._agent_chat(
+                f"Judge this action. If safe, respond with 'SAFE' and why. If unsafe, respond with 'UNSAFE' and why.\n"
+                f"Step: {step}\nProponent: {pro}\nOpponent: {con}"
+            )
+            return "safe" in (verdict or "").lower()
+        except Exception:
+            return False
+
     def _send_capabilities(self) -> None:
         tools = sorted(list(self.tools.tools.keys()))
         payload = {
@@ -815,6 +847,140 @@ class AgentApp:
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
+
+    def _start_dreaming_loop(self) -> None:
+        interval_hours = int(os.getenv("AGENTIC_DREAMING_HOURS", "24"))
+        runs_dir = os.path.join(self.settings.data_dir, "runs")
+
+        def _dream():
+            try:
+                wisdom_lines = []
+                if os.path.isdir(runs_dir):
+                    for name in sorted(os.listdir(runs_dir))[-20:]:
+                        summary_path = os.path.join(runs_dir, name, "summary.md")
+                        if not os.path.exists(summary_path):
+                            continue
+                        with open(summary_path, "r", encoding="utf-8") as handle:
+                            text = handle.read().strip()
+                        if text:
+                            wisdom_lines.append(text.splitlines()[-1][:200])
+                if wisdom_lines:
+                    wisdom = " | ".join(wisdom_lines[-10:])
+                    self.memory.add_memory(
+                        kind="wisdom",
+                        content=wisdom,
+                        tags=["dreaming"],
+                        ttl_seconds=30 * 24 * 3600,
+                        scope="shared",
+                    )
+                # prune old run folders (keep last 50)
+                if os.path.isdir(runs_dir):
+                    runs = sorted(os.listdir(runs_dir))
+                    for old in runs[:-50]:
+                        try:
+                            old_path = os.path.join(runs_dir, old)
+                            if os.path.isdir(old_path):
+                                for root, dirs, files in os.walk(old_path, topdown=False):
+                                    for f in files:
+                                        os.remove(os.path.join(root, f))
+                                    for d in dirs:
+                                        os.rmdir(os.path.join(root, d))
+                                os.rmdir(old_path)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        def _loop():
+            while True:
+                _dream()
+                time.sleep(max(1, interval_hours) * 3600)
+
+        threading.Thread(target=_loop, daemon=True).start()
+
+    def _start_world_loop(self) -> None:
+        interval = int(os.getenv("AGENTIC_WORLD_LOOP_INTERVAL", "60"))
+
+        def _loop():
+            while True:
+                try:
+                    desires = self.memory.list_bdi("desire", limit=20)
+                    beliefs = self.memory.list_bdi("belief", limit=20)
+                    belief_text = " ".join([b.get("text", "") for b in beliefs])
+                    for d in desires:
+                        text = d.get("text", "")
+                        lowered = text.lower()
+                        if "clean" in lowered and ("temp" in belief_text or "tmp" in belief_text):
+                            run = self._create_task_run("Clean temp files in workspace.")
+                            self.log_line("World loop queued: Clean temp files.")
+                            self.pending_runs[run.run_id] = run
+                except Exception:
+                    pass
+                time.sleep(interval)
+
+        threading.Thread(target=_loop, daemon=True).start()
+
+    def _start_cfo_loop(self) -> None:
+        max_calls = int(os.getenv("AGENTIC_CFO_MAX_TOOL_CALLS", "200"))
+        max_tokens = int(os.getenv("AGENTIC_CFO_MAX_TOKENS", "200000"))
+
+        def _loop():
+            while True:
+                try:
+                    snap = self.metrics.snapshot()
+                    counters = snap.get("counters", {})
+                    calls = sum(v for k, v in counters.items() if k.startswith("tool.") and k.endswith(".calls"))
+                    tokens_in = counters.get("tokens_in", 0)
+                    tokens_out = counters.get("tokens_out", 0)
+                    if calls > max_calls or (tokens_in + tokens_out) > max_tokens:
+                        self.log_line("CFO: budget exceeded, pausing auto-reply and switching to offline.")
+                        self._set_a2a_bridge_pause(True)
+                        self.edge_mode = "offline"
+                except Exception:
+                    pass
+                time.sleep(30)
+
+        threading.Thread(target=_loop, daemon=True).start()
+
+    def _start_vision_loop(self) -> None:
+        interval = float(os.getenv("AGENTIC_VISION_FPS", "1.0"))
+
+        def _loop():
+            try:
+                import pytesseract  # type: ignore
+                import pyautogui  # type: ignore
+            except Exception:
+                return
+            while True:
+                try:
+                    img = pyautogui.screenshot()
+                    text = pytesseract.image_to_string(img)
+                    lowered = (text or "").lower()
+                    if "traceback" in lowered or "error" in lowered:
+                        self.log_line("Vision: detected error on screen. Want me to help?")
+                except Exception:
+                    pass
+                time.sleep(max(0.2, 1.0 / max(0.1, interval)))
+
+        threading.Thread(target=_loop, daemon=True).start()
+
+    def _start_jarvis_loop(self) -> None:
+        interval = int(os.getenv("AGENTIC_JARVIS_INTERVAL", "10"))
+        model = os.getenv("AGENTIC_JARVIS_MODEL", "base")
+
+        def _loop():
+            while True:
+                try:
+                    text = record_and_transcribe(seconds=5, model_name=model)
+                    if text:
+                        reply = self._agent_chat(text) or ""
+                        if reply:
+                            speak_text(reply)
+                except Exception:
+                    pass
+                time.sleep(interval)
+
+        threading.Thread(target=_loop, daemon=True).start()
 
     def stop_run(self) -> None:
         self.stop_event.set()
@@ -1806,6 +1972,11 @@ class AgentApp:
                 self.settings.ollama_cost_output_per_million,
             )
         self.memory.log_model_run(model_name or "", tokens_in, tokens_out, cost, latency)
+        try:
+            self.metrics.inc("tokens_in", tokens_in)
+            self.metrics.inc("tokens_out", tokens_out)
+        except Exception:
+            pass
 
         return output
 
@@ -1884,6 +2055,11 @@ class AgentApp:
     def _execute_step(self, step: str):
 
         lowered = step.strip().lower()
+
+        if os.getenv("AGENTIC_DEBATE", "false").lower() in ("1", "true", "yes", "on"):
+            risky = any(k in lowered for k in ("delete", "drop", "format", "rm ", "wipe", "destroy"))
+            if risky and not self._debate_step(step):
+                raise RuntimeError("Debate protocol rejected this action as unsafe.")
 
         if lowered.startswith("delegate:"):
             rest = step.split(":", 1)[1].strip()
@@ -2370,6 +2546,14 @@ class AgentApp:
                 self.log_line(f"mcp_resources error: {exc}")
             return
 
+        if lowered == "mcp_providers":
+            try:
+                result = self.mcp.list_providers()
+                self.log_line(json.dumps(result))
+            except Exception as exc:
+                self.log_line(f"mcp_providers error: {exc}")
+            return
+
         if lowered.startswith("mcp_prompts "):
             provider = step[len("mcp_prompts "):].strip()
             try:
@@ -2386,6 +2570,26 @@ class AgentApp:
                 self.log_line(json.dumps(result))
             except Exception as exc:
                 self.log_line(f"mcp_tools error: {exc}")
+            return
+
+        if lowered.startswith("lsp_find "):
+            name = step[len("lsp_find "):].strip()
+            root = self.settings.allowed_paths or os.getcwd()
+            try:
+                results = find_symbol_def(root, name)
+                self.log_line(json.dumps(results))
+            except Exception as exc:
+                self.log_line(f"lsp_find error: {exc}")
+            return
+
+        if lowered.startswith("lsp_inherits "):
+            base = step[len("lsp_inherits "):].strip()
+            root = self.settings.allowed_paths or os.getcwd()
+            try:
+                results = find_inherits(root, base)
+                self.log_line(json.dumps(results))
+            except Exception as exc:
+                self.log_line(f"lsp_inherits error: {exc}")
             return
 
         if lowered.startswith("workflow "):
@@ -3300,6 +3504,53 @@ def _make_web_handler(app):
             if self.path == "/api/a2a":
                 body = json.dumps(app.a2a.recent(20)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/cockpit":
+                payload = {
+                    "metrics": app.metrics.snapshot(),
+                    "a2a": app.a2a.recent(20),
+                    "events": app.memory.recent_events(50),
+                }
+                body = json.dumps(payload).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/dashboard":
+                html = """
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Agentic Cockpit</title>
+    <style>
+      body { font-family: Segoe UI, Arial, sans-serif; margin: 20px; }
+      pre { background: #f5f5f5; padding: 12px; white-space: pre-wrap; }
+      .row { display: flex; gap: 12px; }
+      .col { flex: 1; }
+    </style>
+  </head>
+  <body>
+    <h2>Agentic Cockpit</h2>
+    <div class="row">
+      <div class="col"><h4>Metrics</h4><pre id="metrics"></pre></div>
+      <div class="col"><h4>A2A</h4><pre id="a2a"></pre></div>
+    </div>
+    <h4>Events</h4>
+    <pre id="events"></pre>
+    <script>
+      async function refresh() {
+        const res = await fetch('/api/cockpit');
+        const data = await res.json();
+        document.getElementById('metrics').textContent = JSON.stringify(data.metrics, null, 2);
+        document.getElementById('a2a').textContent = JSON.stringify(data.a2a, null, 2);
+        document.getElementById('events').textContent = JSON.stringify(data.events, null, 2);
+      }
+      setInterval(refresh, 2000);
+      refresh();
+    </script>
+  </body>
+</html>
+"""
+                self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html")
                 return
             if self.path != "/":
 
