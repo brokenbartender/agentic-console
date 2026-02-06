@@ -16,6 +16,7 @@ if (!(Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir | Out-N
 
 if (-not $StateFile) { $StateFile = Join-Path $dataDir "a2a_bridge_state.json" }
 if (-not $LogFile) { $LogFile = Join-Path $dataDir "a2a_bridge.log" }
+$pauseFile = Join-Path $dataDir "a2a_bridge_pause.json"
 
 if (-not $SharedSecret) { $SharedSecret = $env:AGENTIC_A2A_SHARED_SECRET }
 if (-not $SenderName) { $SenderName = if ($env:AGENTIC_NODE_NAME) { $env:AGENTIC_NODE_NAME } else { "laptop" } }
@@ -57,6 +58,13 @@ function Log-Line($text) {
   Add-Content -Path $LogFile -Value $line
 }
 
+function Is-Paused {
+  if (Test-Path $pauseFile) {
+    try { return (Get-Content $pauseFile -Raw | ConvertFrom-Json).paused } catch { return $false }
+  }
+  return $false
+}
+
 function Send-A2A($message) {
   $payload = @{ sender = $SenderName; receiver = $PeerName; message = $message; shared_secret = $SharedSecret } | ConvertTo-Json -Compress
   Invoke-RestMethod -Method Post -Uri $A2ASend -Body $payload -ContentType "application/json" | Out-Null
@@ -80,14 +88,17 @@ while ($true) {
     if ($msgs) {
       $new = $msgs | Where-Object { $_.timestamp -gt $state.last_ts } | Sort-Object -Property timestamp
       foreach ($m in $new) {
-        # Respond to any message from the peer (receiver may be "remote" or "local")
         if ($m.sender -eq $PeerName) {
           Log-Line "INBOUND from $($m.sender): $($m.message)"
-          $prompt = "Desktop message: $($m.message)`nRespond concisely."
-          $reply = Run-Codex $prompt
-          if ($reply) {
-            Send-A2A $reply
-            Log-Line "REPLIED to $PeerName: $reply"
+          if (-not (Is-Paused)) {
+            $prompt = "Desktop message: $($m.message)`nRespond concisely."
+            $reply = Run-Codex $prompt
+            if ($reply) {
+              Send-A2A $reply
+              Log-Line "REPLIED to $PeerName: $reply"
+            }
+          } else {
+            Log-Line "AUTO-REPLY PAUSED"
           }
         }
         if ($m.timestamp -gt $state.last_ts) { $state.last_ts = $m.timestamp }

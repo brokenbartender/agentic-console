@@ -43,3 +43,12 @@ Inbound A2A messages are also persisted to the Agentic Console memory store
 Additionally, a compact per-thread summary is maintained in
 `data/a2a_thread_summaries.json` and periodically persisted to memory
 as `kind=a2a_thread_summary` with a 7-day TTL.
+## UI Control
+The Agentic Console UI includes an **A2A Control** tab with Start/Stop/Pause/Resume
+and a live transcript. Using **Send & Join** pauses auto-reply so you can
+participate in a 3-way conversation.
+
+## Pause File
+Auto-reply can be paused by writing:
+`data/a2a_bridge_pause.json` => `{ "paused": true }`.
+The UI controls this automatically.

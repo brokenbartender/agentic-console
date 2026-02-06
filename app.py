@@ -19,6 +19,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import io
+import subprocess
 
 import contextlib
 
@@ -297,6 +298,7 @@ class AgentApp:
 
         self.memory = memory
         self.node_name = self.settings.node_name
+        self.a2a_pause_path = os.path.join(self.settings.data_dir, "a2a_bridge_pause.json")
 
         self.metrics = Metrics()
 
@@ -545,10 +547,20 @@ class AgentApp:
         main_pane.add(left, weight=3)
         main_pane.add(right, weight=2)
 
-        self.log = tk.Text(left, wrap=tk.WORD)
+        self.left_notebook = ttk.Notebook(left)
+        self.left_notebook.pack(fill=tk.BOTH, expand=True)
+
+        console_tab = ttk.Frame(self.left_notebook)
+        a2a_tab = ttk.Frame(self.left_notebook)
+        self.left_notebook.add(console_tab, text="Console")
+        self.left_notebook.add(a2a_tab, text="A2A Control")
+
+        self.log = tk.Text(console_tab, wrap=tk.WORD)
         self.log.pack(fill=tk.BOTH, expand=True)
         self.log.insert(tk.END, "Ready. Type a command and press Enter.\n")
         self.log.configure(state=tk.DISABLED)
+
+        self._build_a2a_tab(a2a_tab)
 
         ttk.Label(right, text="Plan (Intent → Plan → Proof)").pack(anchor="w")
         self.plan_text = tk.Text(right, height=10, wrap=tk.WORD)
@@ -565,6 +577,139 @@ class AgentApp:
 
         help_text = "Plan first, then approve to execute. Demo Mode blocks destructive actions."
         ttk.Label(top, text=help_text, foreground="#555").pack(fill=tk.X)
+
+    def _build_a2a_tab(self, parent):
+        status_row = ttk.Frame(parent)
+        status_row.pack(fill=tk.X, pady=(4, 2))
+
+        self.a2a_status_var = tk.StringVar(value="UNKNOWN")
+        ttk.Label(status_row, text="Status:").pack(side=tk.LEFT)
+        ttk.Label(status_row, textvariable=self.a2a_status_var).pack(side=tk.LEFT, padx=6)
+
+        ttk.Label(status_row, text="Peer:").pack(side=tk.LEFT, padx=(12, 0))
+        peers = list(self.a2a_net.peers.keys())
+        if not peers:
+            peers = ["desktop"]
+        self.a2a_peer_var = tk.StringVar(value=peers[0])
+        self.a2a_peer_combo = ttk.Combobox(status_row, textvariable=self.a2a_peer_var, values=peers, width=16)
+        self.a2a_peer_combo.pack(side=tk.LEFT, padx=4)
+
+        ttk.Label(status_row, text="Filter:").pack(side=tk.LEFT, padx=(12, 0))
+        self.a2a_filter_var = tk.StringVar(value="all")
+        self.a2a_filter_combo = ttk.Combobox(
+            status_row,
+            textvariable=self.a2a_filter_var,
+            values=["all", "desktop", "laptop", "user"],
+            width=10,
+        )
+        self.a2a_filter_combo.pack(side=tk.LEFT, padx=4)
+
+        btn_row = ttk.Frame(parent)
+        btn_row.pack(fill=tk.X, pady=(2, 6))
+        ttk.Button(btn_row, text="Start Conversation", command=self._a2a_start).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_row, text="Stop Conversation", command=self._a2a_stop).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_row, text="Pause", command=self._a2a_pause).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_row, text="Resume AI↔AI", command=self._a2a_resume).pack(side=tk.LEFT, padx=2)
+
+        self.a2a_text = tk.Text(parent, wrap=tk.WORD, height=20)
+        self.a2a_text.pack(fill=tk.BOTH, expand=True, padx=2, pady=4)
+        self.a2a_text.configure(state=tk.DISABLED)
+
+        input_row = ttk.Frame(parent)
+        input_row.pack(fill=tk.X, pady=(4, 2))
+        ttk.Label(input_row, text="Send:").pack(side=tk.LEFT)
+        self.a2a_input_var = tk.StringVar()
+        entry = ttk.Entry(input_row, textvariable=self.a2a_input_var)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        entry.bind("<Return>", lambda _e: self._a2a_send(join=False))
+        ttk.Button(input_row, text="Send only", command=lambda: self._a2a_send(join=False)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(input_row, text="Send & Join", command=lambda: self._a2a_send(join=True)).pack(side=tk.LEFT, padx=2)
+
+        self._update_a2a_status()
+        self.root.after(1000, self._a2a_refresh)
+
+    def _run_shell_async(self, cmd: str) -> None:
+        def _worker():
+            try:
+                subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+            except Exception:
+                return
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _set_a2a_bridge_pause(self, paused: bool) -> None:
+        os.makedirs(self.settings.data_dir, exist_ok=True)
+        payload = {"paused": bool(paused), "updated": datetime.now().isoformat()}
+        try:
+            with open(self.a2a_pause_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+        except Exception:
+            return
+        self._update_a2a_status()
+
+    def _is_a2a_paused(self) -> bool:
+        try:
+            with open(self.a2a_pause_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return bool(data.get("paused"))
+        except Exception:
+            return False
+
+    def _update_a2a_status(self) -> None:
+        self.a2a_status_var.set("PAUSED" if self._is_a2a_paused() else "LIVE")
+
+    def _a2a_start(self) -> None:
+        self._set_a2a_bridge_pause(False)
+        self._run_shell_async('schtasks /Run /TN "AgenticA2ABridge"')
+        self._run_shell_async('schtasks /Run /TN "AgenticA2ARelay"')
+
+    def _a2a_stop(self) -> None:
+        self._set_a2a_bridge_pause(True)
+        self._run_shell_async('schtasks /End /TN "AgenticA2ABridge"')
+
+    def _a2a_pause(self) -> None:
+        self._set_a2a_bridge_pause(True)
+
+    def _a2a_resume(self) -> None:
+        self._set_a2a_bridge_pause(False)
+
+    def _a2a_send(self, join: bool = False) -> None:
+        message = (self.a2a_input_var.get() or "").strip()
+        if not message:
+            return
+        peer = (self.a2a_peer_var.get() or "desktop").strip()
+        sender = "user" if join else getattr(self, "node_name", "work")
+        try:
+            self.a2a_net.send(peer, sender, "remote", message)
+            self.log_line(f"A2A send to {peer}: {message}")
+        except Exception as exc:
+            self.log_line(f"A2A send failed: {exc}")
+        if join:
+            self._set_a2a_bridge_pause(True)
+        self.a2a_input_var.set("")
+        self._a2a_refresh()
+
+    def _a2a_refresh(self) -> None:
+        try:
+            msgs = self.a2a.recent(200)
+        except Exception:
+            self.root.after(2000, self._a2a_refresh)
+            return
+        msgs = list(reversed(msgs))
+        filt = (self.a2a_filter_var.get() or "all").strip()
+        lines = []
+        for m in msgs:
+            sender = m.get("sender")
+            if filt != "all" and sender != filt:
+                continue
+            ts = datetime.fromtimestamp(m.get("timestamp", time.time())).isoformat(timespec="seconds")
+            lines.append(f"[{ts}] {sender} -> {m.get('receiver')}: {m.get('message')}")
+        self.a2a_text.configure(state=tk.NORMAL)
+        self.a2a_text.delete("1.0", tk.END)
+        self.a2a_text.insert(tk.END, "\n".join(lines) + ("\n" if lines else ""))
+        self.a2a_text.configure(state=tk.DISABLED)
+        self._update_a2a_status()
+        self.root.after(2000, self._a2a_refresh)
 
 
 
