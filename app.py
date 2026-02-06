@@ -592,13 +592,20 @@ class AgentApp:
         log_audit(self.memory, "task_event", event.__dict__, redact=getattr(self, "redact_logs", False))
 
     def log_line(self, message):
-        self.log.configure(state=tk.NORMAL)
         ts = datetime.now().strftime("%H:%M:%S")
         safe = self._maybe_redact(message)
-        self.log.insert(tk.END, f"[{ts}] {safe}\n")
+        line = f"[{ts}] {safe}"
+        # Allow logging before UI widgets are initialized.
+        if not hasattr(self, "log"):
+            self.log_buffer.append(line)
+            if len(self.log_buffer) > 500:
+                self.log_buffer = self.log_buffer[-500:]
+            return
+        self.log.configure(state=tk.NORMAL)
+        self.log.insert(tk.END, f"{line}\n")
         self.log.see(tk.END)
         self.log.configure(state=tk.DISABLED)
-        self.log_buffer.append(f"[{ts}] {safe}")
+        self.log_buffer.append(line)
         if len(self.log_buffer) > 500:
             self.log_buffer = self.log_buffer[-500:]
 
