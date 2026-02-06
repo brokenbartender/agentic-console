@@ -470,7 +470,11 @@
     <div class="overlay" id="overlay" onclick="toggleSheet(false)"></div>
     <div class="sheet" id="sheet">
       <h3>Configuration</h3>
-      <pre id="config" class="mono">Loading...</pre>
+      <textarea id="config-edit" class="mono" style="width:100%; height:300px;"></textarea>
+      <div class="actions" style="margin-top:10px;">
+        <button class="primary" onclick="saveConfig()">Save</button>
+        <button class="secondary" onclick="loadConfig()">Reload</button>
+      </div>
     </div>
     <div class="brain-view" id="brain">
       <div class="brain-canvas">
@@ -788,7 +792,7 @@
         const sources = await fetch("/api/rag_sources").then((r) => r.json());
         renderSources(sources || []);
         const cfg = await fetch("/api/config").then((r) => r.json());
-        document.getElementById("config").textContent = JSON.stringify(cfg, null, 2);
+        document.getElementById("config-edit").value = JSON.stringify(cfg, null, 2);
         const log = await fetch("/api/log_tail").then((r) => r.json());
         document.getElementById("terminal").textContent = (log.lines || []).join("\\n");
         const hud = await fetch("/api/vla_latest").then((r) => r.json());
@@ -805,6 +809,26 @@
           document.getElementById("artifact-frame").srcdoc = artifact.content;
           showArtifact("preview");
         }
+      }
+
+      async function loadConfig() {
+        const cfg = await fetch("/api/config").then((r) => r.json());
+        document.getElementById("config-edit").value = JSON.stringify(cfg, null, 2);
+      }
+
+      async function saveConfig() {
+        let updates = {};
+        try {
+          updates = JSON.parse(document.getElementById("config-edit").value || "{}");
+        } catch {
+          alert("Invalid JSON");
+          return;
+        }
+        await fetch("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates }),
+        });
       }
 
       setInterval(refresh, 2000);
