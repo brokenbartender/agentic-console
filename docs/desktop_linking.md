@@ -111,6 +111,21 @@ If it fails, capture the exact error text and re-check:
 - The file ACLs allow only `Administrators` and `SYSTEM`
 - `sshd` is running and port 22 is listening
 
+## Codex-Work Next Steps (run on codex-work)
+These steps are for the Codex AI session on the work machine.
+1. Ensure the key exists (generate if missing):
+   ```powershell
+   ssh-keygen -t ed25519 -f $env:USERPROFILE\.ssh\codydesktop -N ""
+   ```
+2. Test SSH using the key:
+   ```powershell
+   ssh -i $env:USERPROFILE\.ssh\codydesktop codym@100.111.161.110
+   ```
+3. If it fails, collect the exact error text and re-check on CODYDESKTOP:
+   - `C:\ProgramData\ssh\administrators_authorized_keys` contains the key
+   - File ACLs: only `Administrators` and `SYSTEM`
+   - `sshd` is running and listening on port 22
+
 ### Current public key (generated on codex-work)
 Use this exact key on CODYDESKTOP:
 ```
