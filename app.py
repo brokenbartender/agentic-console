@@ -709,6 +709,48 @@ class AgentApp:
         with open(self.current_run.extracted_path, "a", encoding="utf-8") as handle:
             handle.write(text.strip() + "\n\n")
 
+    def _update_a2a_thread_summary(self, sender: str, receiver: str, message: str) -> None:
+        path = os.path.join(self.settings.data_dir, "a2a_thread_summaries.json")
+        key = f"{sender}->{receiver}"
+        now = datetime.now().isoformat()
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception:
+            data = {}
+        entry = data.get(key, {"summary": "", "messages": [], "count_since_memory": 0})
+        entry["messages"].append({"ts": now, "sender": sender, "receiver": receiver, "message": message})
+        if len(entry["messages"]) > 10:
+            entry["messages"] = entry["messages"][-10:]
+        snippet = f"{sender}: {message}".strip()
+        summary = entry.get("summary", "")
+        summary = f"{summary} | {snippet}" if summary else snippet
+        if len(summary) > 1000:
+            summary = "…" + summary[-1000:]
+        entry["summary"] = summary
+        entry["count_since_memory"] = int(entry.get("count_since_memory", 0)) + 1
+        data[key] = entry
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+        except Exception:
+            return
+        if entry["count_since_memory"] >= 5:
+            try:
+                self.memory.add_memory(
+                    kind="a2a_thread_summary",
+                    content=f"{key}: {summary}",
+                    tags=[sender, receiver, "a2a_summary"],
+                    ttl_seconds=7 * 24 * 3600,
+                    scope="shared",
+                )
+                entry["count_since_memory"] = 0
+                data[key] = entry
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(data, handle)
+            except Exception:
+                return
+
     def _on_a2a_message(self, sender: str, receiver: str, message: str) -> None:
         # Persist inbound A2A to memory for self-improvement and recall
         try:
@@ -719,6 +761,10 @@ class AgentApp:
                 tags=[sender, receiver, "a2a"],
                 scope="shared",
             )
+        except Exception:
+            pass
+        try:
+            self._update_a2a_thread_summary(sender, receiver, message)
         except Exception:
             pass
         if str(self.settings.a2a_auto_reply).lower() not in ("1", "true", "yes", "on"):

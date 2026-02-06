@@ -39,3 +39,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\a2a_relay.ps1
 ## Memory
 Inbound A2A messages are also persisted to the Agentic Console memory store
 (kind=`a2a`, tags include sender/receiver), enabling self-improvement workflows.
+
+Additionally, a compact per-thread summary is maintained in
+`data/a2a_thread_summaries.json` and periodically persisted to memory
+as `kind=a2a_thread_summary` with a 7-day TTL.
