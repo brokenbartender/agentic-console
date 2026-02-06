@@ -948,9 +948,15 @@ class AgentApp:
 
                 msg_type = None
                 msg_text = raw
+                trace_id = None
+                thread_id = None
+                message_id = None
                 if payload:
-                    msg_type = (payload.get("type") or "").lower()
-                    msg_text = payload.get("text") or payload.get("task") or payload.get("message") or raw
+                    msg_type = (payload.get("type") or payload.get("performative") or "").lower()
+                    msg_text = payload.get("text") or payload.get("task") or payload.get("content") or payload.get("message") or raw
+                    trace_id = payload.get("trace_id")
+                    thread_id = payload.get("thread_id")
+                    message_id = payload.get("message_id")
 
                 # Simple prefix overrides
                 lowered = msg_text.lower().strip()
@@ -986,7 +992,14 @@ class AgentApp:
                     reply = f"AUTO_REPLY: hostname={host} time={now}"
 
                 if reply:
-                    self.a2a_net.send(sender, getattr(self, "node_name", "work"), "remote", reply)
+                    reply_payload = {
+                        "type": "reply",
+                        "text": reply,
+                        "trace_id": trace_id,
+                        "thread_id": thread_id or message_id,
+                        "reply_to": message_id,
+                    }
+                    self.a2a_net.send(sender, getattr(self, "node_name", "work"), "remote", reply_payload)
                     self.log_line(f"A2A auto-reply sent to {sender}.")
             except Exception as exc:
                 self.log_line(f"A2A auto-reply failed: {exc}")

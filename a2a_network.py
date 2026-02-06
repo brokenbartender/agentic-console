@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 import json
+import uuid
+import time
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -65,16 +67,12 @@ class A2ANetwork:
         self._server.server_close()
         self._server = None
 
-    def send(self, peer: str, sender: str, receiver: str, message: str) -> None:
+    def send(self, peer: str, sender: str, receiver: str, message) -> None:
         if peer not in self.peers:
             raise RuntimeError(f"Unknown peer: {peer}")
         host, port = self.peers[peer]
-        payload = {
-            "sender": sender,
-            "receiver": receiver,
-            "message": message,
-            "shared_secret": self.shared_secret,
-        }
+        payload = self._normalize_payload(sender, receiver, message)
+        payload["shared_secret"] = self.shared_secret
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             f"http://{host}:{port}/a2a",
@@ -89,6 +87,22 @@ class A2ANetwork:
     def broadcast(self, sender: str, receiver: str, message: str) -> None:
         for peer in self.peers:
             self.send(peer, sender, receiver, message)
+
+    def _normalize_payload(self, sender: str, receiver: str, message):
+        payload = {}
+        if isinstance(message, dict):
+            payload.update(message)
+        else:
+            payload["message"] = message
+        payload.setdefault("sender", sender)
+        payload.setdefault("receiver", receiver)
+        if "message" not in payload and "content" in payload:
+            payload["message"] = payload.get("content")
+        payload.setdefault("message_id", str(uuid.uuid4()))
+        payload.setdefault("thread_id", payload.get("message_id"))
+        payload.setdefault("trace_id", str(uuid.uuid4()))
+        payload.setdefault("timestamp", time.time())
+        return payload
 
     def _make_handler(self):
         bus = self.bus
@@ -115,11 +129,20 @@ class A2ANetwork:
                     return
                 sender = payload.get("sender") or "unknown"
                 receiver = payload.get("receiver") or "local"
-                message = payload.get("message") or ""
-                bus.send(sender, receiver, message)
+                if "message" not in payload and "content" in payload:
+                    payload["message"] = payload.get("content")
+                if "message_id" not in payload:
+                    payload["message_id"] = str(uuid.uuid4())
+                if "thread_id" not in payload:
+                    payload["thread_id"] = payload.get("message_id")
+                if "trace_id" not in payload:
+                    payload["trace_id"] = str(uuid.uuid4())
+                if "timestamp" not in payload:
+                    payload["timestamp"] = time.time()
+                bus.send(sender, receiver, json.dumps(payload, separators=(",", ":")))
                 if on_message:
                     try:
-                        on_message(sender, receiver, message)
+                        on_message(sender, receiver, json.dumps(payload, separators=(",", ":")))
                     except Exception:
                         pass
                 self.send_response(200)

@@ -64,7 +64,22 @@ AGENTIC_A2A_EXECUTE=false
 Message formats supported:
 - Plain text → handled per mode
 - `plan: <task>` or `task: <task>` → returns a plan
-- JSON: `{"type":"plan","text":"<task>"}` or `{"type":"chat","text":"<message>"}`  
+- JSON: `{"type":"plan","text":"<task>"}` or `{"type":"chat","text":"<message>"}`
+
+## ACL Schema (recommended)
+```
+{
+  "message_id": "uuid",
+  "thread_id": "uuid",
+  "trace_id": "uuid",
+  "type": "plan|chat|reply|execute|inform",
+  "performative": "REQUEST|INFORM|QUERY",
+  "content": "Analyze this CSV",
+  "ontology": "data-science",
+  "language": "natural",
+  "reply_to": "uuid"
+}
+```
 ## Auto-Update
 To keep the desktop/laptop in sync without manual pulls, use:
 
