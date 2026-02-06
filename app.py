@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from datetime import datetime
+import socket
 
 import json
 
@@ -326,6 +327,7 @@ class AgentApp:
             self.settings.a2a_port,
             self.settings.a2a_shared_secret,
             self.settings.a2a_peers,
+            on_message=self._on_a2a_message,
         )
         if str(self.settings.a2a_listen).lower() in ("1", "true", "yes", "on"):
             try:
@@ -706,6 +708,25 @@ class AgentApp:
             return
         with open(self.current_run.extracted_path, "a", encoding="utf-8") as handle:
             handle.write(text.strip() + "\n\n")
+
+    def _on_a2a_message(self, sender: str, receiver: str, message: str) -> None:
+        if str(self.settings.a2a_auto_reply).lower() not in ("1", "true", "yes", "on"):
+            return
+        if sender == getattr(self, "node_name", "work"):
+            return
+        lowered = (message or "").lower()
+        if not any(token in lowered for token in ("ping", "proof", "hello", "test")):
+            return
+        if sender not in self.a2a_net.peers:
+            return
+        host = socket.gethostname()
+        now = datetime.now().isoformat()
+        reply = f"AUTO_REPLY: hostname={host} time={now}"
+        try:
+            self.a2a_net.send(sender, getattr(self, "node_name", "work"), "remote", reply)
+            self.log_line(f"A2A auto-reply sent to {sender}.")
+        except Exception as exc:
+            self.log_line(f"A2A auto-reply failed: {exc}")
 
     def _record_action(self, step: PlanStep, status: str, error: str = "") -> None:
         if not self.current_run or not self.current_run.actions_path:

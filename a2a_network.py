@@ -32,12 +32,21 @@ def _parse_peers(raw: str) -> Dict[str, Tuple[str, int]]:
 
 
 class A2ANetwork:
-    def __init__(self, bus, host: str, port: int, shared_secret: str, peers_raw: str) -> None:
+    def __init__(
+        self,
+        bus,
+        host: str,
+        port: int,
+        shared_secret: str,
+        peers_raw: str,
+        on_message=None,
+    ) -> None:
         self.bus = bus
         self.host = host
         self.port = port
         self.shared_secret = shared_secret
         self.peers = _parse_peers(peers_raw)
+        self.on_message = on_message
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -107,6 +116,11 @@ class A2ANetwork:
                 receiver = payload.get("receiver") or "local"
                 message = payload.get("message") or ""
                 bus.send(sender, receiver, message)
+                if on_message:
+                    try:
+                        on_message(sender, receiver, message)
+                    except Exception:
+                        pass
                 self.send_response(200)
                 self.end_headers()
 

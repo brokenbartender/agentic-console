@@ -75,6 +75,7 @@ class Settings:
     a2a_shared_secret: str = _env("AGENTIC_A2A_SHARED_SECRET", "")
     a2a_peers: str = _env("AGENTIC_A2A_PEERS", "")
     node_name: str = _env("AGENTIC_NODE_NAME", "work")
+    a2a_auto_reply: str = _env("AGENTIC_A2A_AUTO_REPLY", "false")
 
 
 def get_settings() -> Settings:
