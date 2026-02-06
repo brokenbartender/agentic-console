@@ -68,6 +68,15 @@
         gap: 16px;
         font-size: 14px;
         color: var(--muted);
+        align-items: center;
+      }
+
+      .persona {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 6px 10px;
+        background: #fff;
+        font-family: "Space Grotesk", system-ui, sans-serif;
       }
 
       .pill {
@@ -149,6 +158,25 @@
         border: 1px solid var(--line);
       }
 
+      .artifact-tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .artifact-view {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fff;
+        overflow: hidden;
+      }
+
+      .artifact-view iframe {
+        width: 100%;
+        height: 240px;
+        border: none;
+      }
+
       .events {
         grid-column: 1 / 3;
         max-height: 380px;
@@ -202,6 +230,13 @@
         <div class="status">
           <div class="pill" id="status-metrics">Metrics: --</div>
           <div class="pill" id="status-events">Events: --</div>
+          <select class="persona" id="persona" onchange="setPersona()">
+            <option value="">Persona: Default</option>
+            <option value="Coder">Coder</option>
+            <option value="Researcher">Researcher</option>
+            <option value="VLA">VLA Operator</option>
+            <option value="Reviewer">Reviewer</option>
+          </select>
         </div>
       </header>
       <main>
@@ -218,6 +253,13 @@
 
         <div class="card artifacts">
           <h3>Artifacts</h3>
+          <div class="artifact-tabs">
+            <button class="secondary" onclick="showArtifact('preview')">Preview</button>
+            <button class="secondary" onclick="showArtifact('raw')">Raw</button>
+          </div>
+          <div class="artifact-view" id="artifact-preview" style="display:none;">
+            <iframe id="artifact-frame" title="artifact preview"></iframe>
+          </div>
           <pre id="artifacts">No artifacts yet.</pre>
         </div>
 
@@ -267,6 +309,16 @@
         await fetch("/api/approve_step", { method: "POST", headers: { "Content-Type": "application/json" } });
       }
 
+      async function setPersona() {
+        const persona = document.getElementById("persona").value;
+        if (!persona) return;
+        await fetch("/api/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: `profile ${persona}` }),
+        });
+      }
+
       function renderEvents(items) {
         const el = document.getElementById("events");
         el.innerHTML = items.map((e) => {
@@ -289,6 +341,31 @@
         }).join("");
       }
 
+      function extractArtifacts(events) {
+        for (const e of events) {
+          if (!e || !e.payload) continue;
+          const payload = e.payload.payload || e.payload;
+          const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+          const match = text.match(/```(html|svg)([\\s\\S]*?)```/i);
+          if (match) {
+            return { type: match[1].toLowerCase(), content: match[2].trim() };
+          }
+        }
+        return null;
+      }
+
+      function showArtifact(mode) {
+        const preview = document.getElementById("artifact-preview");
+        const raw = document.getElementById("artifacts");
+        if (mode === "preview") {
+          preview.style.display = "block";
+          raw.style.display = "none";
+        } else {
+          preview.style.display = "none";
+          raw.style.display = "block";
+        }
+      }
+
       async function refresh() {
         const cockpit = await fetch("/api/cockpit").then((r) => r.json());
         renderEvents(cockpit.events || []);
@@ -298,6 +375,13 @@
         document.getElementById("status-events").textContent = `Events: ${cockpit.events ? cockpit.events.length : 0}`;
         const tools = await fetch("/api/tools").then((r) => r.json());
         renderTools(tools || []);
+
+        const artifact = extractArtifacts(cockpit.events || []);
+        if (artifact) {
+          document.getElementById("artifacts").textContent = artifact.content;
+          document.getElementById("artifact-frame").srcdoc = artifact.content;
+          showArtifact("preview");
+        }
       }
 
       setInterval(refresh, 2000);
