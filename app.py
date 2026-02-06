@@ -2934,9 +2934,12 @@ class AgentApp:
                 self.log_line("sandbox_run blocked in DEMO MODE.")
                 return
             try:
+                self._terminal_queue.put("[sandbox] running...\n")
                 result = run_python(code)
+                self._terminal_queue.put("[sandbox] done\n")
                 self.log_line(json.dumps(result))
             except Exception as exc:
+                self._terminal_queue.put(f"[sandbox] error: {exc}\n")
                 self.log_line(f"sandbox_run error: {exc}")
             return
 
