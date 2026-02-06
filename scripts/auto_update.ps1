@@ -32,7 +32,7 @@ function Restart-AgenticConsole($path) {
     }
   } catch {}
 
-  Start-Process powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',"cd $path; python app.py") | Out-Null
+  Start-Process powershell -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',"cd $path; python app.py") | Out-Null
   Log-Line "Agentic Console restarted"
 }
 
