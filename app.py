@@ -860,7 +860,7 @@ class AgentApp:
     def _terminal_maybe_autorun(self) -> None:
         if self._terminal_autorun_done:
             return
-        if os.getenv("AGENTIC_TERMINAL_AUTORUN", "true").lower() not in ("1", "true", "yes", "on"):
+        if os.getenv("AGENTIC_TERMINAL_AUTORUN", "false").lower() not in ("1", "true", "yes", "on"):
             return
         cmd = os.getenv("AGENTIC_TERMINAL_AUTORUN_CMD", "codex danger-full-access")
         if not cmd:
@@ -1579,8 +1579,29 @@ class AgentApp:
 
     def _create_task_run(self, cmd: str) -> TaskRun:
         run_id = datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+        trace_id = str(uuid.uuid4())
         intent = self._build_intent(cmd)
         steps = self._build_plan(cmd)
+        plan_schema = None
+        try:
+            schema_steps = [self._step_to_schema(i + 1, s.command or f"{s.action} {s.target}".strip()) for i, s in enumerate(steps)]
+            plan_schema = PlanSchema(
+                run_id=run_id,
+                trace_id=trace_id,
+                goal=cmd,
+                success_criteria=["No errors and user intent satisfied"],
+                steps=schema_steps,
+                constraints={"demo_mode": self.demo_mode},
+                budget=Budget(
+                    max_steps=getattr(self.settings, "max_plan_steps", 20) or 20,
+                    max_tool_calls=int(getattr(self.settings, "max_tool_calls_per_task", 50) or 50),
+                    max_seconds=900,
+                ),
+                created_at=time.time(),
+                model=getattr(self.settings, "openai_model", ""),
+            )
+        except Exception:
+            plan_schema = None
         plan_json = json.dumps(
             [
                 {
@@ -1598,12 +1619,13 @@ class AgentApp:
             run_id=run_id,
             intent=intent,
             plan_steps=steps,
+            plan_schema=plan_schema,
             approved=False,
             mode="advanced" if self.advanced_mode else "demo",
             status=OrchestratorState.PLANNED.value,
             created_at=datetime.utcnow().isoformat() + "Z",
             command=cmd,
-            trace_id=str(uuid.uuid4()),
+            trace_id=trace_id,
         )
         self.pending_runs[run_id] = run
         self.memory.create_task_run(
@@ -1741,6 +1763,17 @@ class AgentApp:
         hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time(), trace_id=run.trace_id)
         log_audit(self.memory, "run_heartbeat", hb.__dict__, redact=getattr(self, "redact_logs", False))
         self._start_proof_pack(run)
+        self._tool_calls_this_task = 0
+        if run.plan_schema:
+            report = self._run_plan_schema(run.plan_schema)
+            run.report = report
+            if report.status == "succeeded":
+                self._set_run_status(run, OrchestratorState.COMPLETE.value)
+            elif report.status == "needs_input":
+                self._set_run_status(run, OrchestratorState.PAUSED.value)
+            else:
+                self._set_run_status(run, OrchestratorState.ERROR.value)
+            return
         for step in run.plan_steps:
             self._current_step_id = step.step
             if self.step_approval_enabled:
@@ -2266,12 +2299,15 @@ class AgentApp:
         tool_calls = 0
         started = time.time()
         for step in plan.steps:
+            self._current_step_id = step.step_id
             self._write_run_state(plan, report, current_step=step.step_id)
             if len(report.steps) >= plan.budget.max_steps:
+                self._current_step_id = None
                 report.status = "failed"
                 report.failure_reason = "Budget exceeded: max_steps"
                 break
             if (time.time() - started) > plan.budget.max_seconds:
+                self._current_step_id = None
                 report.status = "failed"
                 report.failure_reason = "Budget exceeded: max_seconds"
                 break
@@ -2285,12 +2321,14 @@ class AgentApp:
             if step.tool != "agent":
                 tool_calls += 1
                 if tool_calls > plan.budget.max_tool_calls:
+                    self._current_step_id = None
                     step_rep.status = "failed"
                     report.status = "failed"
                     report.failure_reason = "Budget exceeded: max_tool_calls"
                     break
             if step.requires_confirmation:
                 if self.memory.get(f"deny_tool:{step.tool}") == "true":
+                    self._current_step_id = None
                     report.status = "needs_input"
                     step_rep.status = "skipped"
                     report.failure_reason = f"Tool {step.tool} blocked by policy"
@@ -2302,6 +2340,7 @@ class AgentApp:
                         extra={"step_id": step.step_id},
                     )
                     self.memory.set("pending_action", json.dumps({"type": "tool", "name": step.tool, "args": step.args.get("raw", "")}))
+                    self._current_step_id = None
                     report.status = "needs_input"
                     step_rep.status = "skipped"
                     break
@@ -2315,14 +2354,14 @@ class AgentApp:
                 )
                 if step.tool == "computer":
                     try:
-                        self._execute_tool("computer", json.dumps({"mode": "observe", "out_dir": os.path.join(self.settings.data_dir, "runs", plan.run_id)}))
+                        self.tools.computer.observe(os.path.join(self.settings.data_dir, "runs", plan.run_id))
                     except Exception:
                         pass
                 tr = self._execute_step_schema(step)
                 step_rep.tool_results.append(tr)
                 if step.tool == "computer":
                     try:
-                        self._execute_tool("computer", json.dumps({"mode": "observe", "out_dir": os.path.join(self.settings.data_dir, "runs", plan.run_id)}))
+                        self.tools.computer.observe(os.path.join(self.settings.data_dir, "runs", plan.run_id))
                     except Exception:
                         pass
                 self._log_event(
@@ -2336,9 +2375,11 @@ class AgentApp:
             step_rep.status = "succeeded" if ok else "failed"
             self._log_event("step_finished", {"status": step_rep.status}, extra={"step_id": step.step_id})
             if step_rep.status == "failed":
+                self._current_step_id = None
                 report.status = "failed"
                 report.failure_reason = f"Step {step.step_id} failed: {step.title}"
                 break
+            self._current_step_id = None
         if report.status == "running":
             report.status = "succeeded"
         report.ended_at = time.time()
