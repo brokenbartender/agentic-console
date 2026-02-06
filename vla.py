@@ -5,13 +5,18 @@ import json
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 try:
     import pyautogui
 except Exception:
     pyautogui = None
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 
 try:
     import keyboard
@@ -32,6 +37,7 @@ class VLAState:
     last_action: str = ""
     last_reason: str = ""
     last_image: str = ""
+    last_dom: list = field(default_factory=list)
     running: bool = False
     paused: bool = False
 
@@ -170,6 +176,7 @@ class LiveDriver:
             "last_action": self.state.last_action,
             "last_reason": self.state.last_reason,
             "last_image": self.state.last_image,
+            "last_dom_elements": len(self.state.last_dom),
         }
 
     def _loop(self) -> None:
@@ -184,6 +191,7 @@ class LiveDriver:
 
         interval = float(os.getenv("AGENTIC_VLA_INTERVAL", "1.0"))
         grid_size = int(os.getenv("AGENTIC_VLA_GRID", "6"))
+        mode = os.getenv("AGENTIC_VLA_MODE", "auto").strip().lower()
         actions_env = os.getenv("AGENTIC_VLA_ACTIONS", "").strip()
         allowed_actions = [a.strip().lower() for a in actions_env.split(",") if a.strip()] or [
             "click",
@@ -192,6 +200,7 @@ class LiveDriver:
             "stop",
         ]
         read_only = _parse_bool(os.getenv("AGENTIC_VLA_READONLY", "true"), True)
+        stitch_desktop = _parse_bool(os.getenv("AGENTIC_VLA_STITCH", "false"), False)
         pause_key = os.getenv("AGENTIC_VLA_PAUSE_KEY", "f9").strip().lower()
         pause_file = os.path.join(self.data_dir, "vla.pause")
         stop_file = os.path.join(self.data_dir, "vla.stop")
@@ -222,15 +231,35 @@ class LiveDriver:
 
             stamp = str(int(time.time()))
             image_path = os.path.join(self.data_dir, "vla", f"screen-{stamp}.png")
-            try:
-                capture_screenshot_with_grid(image_path, grid_size=grid_size)
-            except Exception as exc:
-                self.app.log_line(f"VLA capture failed: {exc}")
-                time.sleep(interval)
-                continue
-            self.state.last_image = image_path
+            web_mode = False
+            if mode in ("auto", "browser", "web"):
+                if getattr(self.app, "page", None) is not None:
+                    try:
+                        dom = self._capture_web_state(image_path)
+                        web_mode = True
+                    except Exception as exc:
+                        self.app.log_line(f"VLA web capture failed: {exc}")
+                        dom = []
+                else:
+                    dom = []
+            else:
+                dom = []
 
-            prompt = self._build_prompt(grid_size)
+            if not web_mode:
+                try:
+                    if stitch_desktop:
+                        image_path = self._capture_desktop_stitch(image_path, grid_size=grid_size)
+                    else:
+                        capture_screenshot_with_grid(image_path, grid_size=grid_size)
+                except Exception as exc:
+                    self.app.log_line(f"VLA capture failed: {exc}")
+                    time.sleep(interval)
+                    continue
+
+            self.state.last_image = image_path
+            self.state.last_dom = dom or []
+
+            prompt = self._build_prompt(grid_size, dom, web_mode)
             reply = ""
             try:
                 reply = self._model.decide(prompt, image_path)
@@ -265,7 +294,7 @@ class LiveDriver:
                 break
 
             try:
-                self._execute_action(action, grid_size)
+                self._execute_action(action, grid_size, web_mode)
             except Exception as exc:
                 self.app.log_line(f"VLA action failed: {exc}")
             time.sleep(interval)
@@ -273,20 +302,143 @@ class LiveDriver:
         self.state.running = False
         self.app.log_line("VLA loop exited.")
 
-    def _build_prompt(self, grid_size: int) -> str:
+    def _capture_web_state(self, image_path: str) -> list:
+        page = getattr(self.app, "page", None)
+        if page is None:
+            raise RuntimeError("No Playwright page available")
+        try:
+            page.screenshot(path=image_path, full_page=True)
+        except Exception:
+            page.screenshot(path=image_path)
+        dom = self._snapshot_dom(page)
+        return dom
+
+    def _snapshot_dom(self, page) -> list:
+        script = """
+(() => {
+  const nodes = [];
+  const selectors = [
+    'a','button','input','select','textarea',
+    '[role=button]','[role=link]','[onclick]'
+  ];
+  const elements = Array.from(document.querySelectorAll(selectors.join(',')));
+  let id = 1;
+  for (const el of elements) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) continue;
+    const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+    const item = {
+      element_id: id++,
+      tag: el.tagName.toLowerCase(),
+      text: text.slice(0, 120),
+      aria: (el.getAttribute('aria-label') || '').slice(0, 120),
+      href: (el.getAttribute('href') || '').slice(0, 200),
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height),
+    };
+    nodes.push(item);
+    if (nodes.length >= 200) break;
+  }
+  return nodes;
+})();
+"""
+        try:
+            return page.evaluate(script)
+        except Exception:
+            return []
+
+    def _click_dom_element(self, element_id: int) -> None:
+        page = getattr(self.app, "page", None)
+        if page is None:
+            raise RuntimeError("No Playwright page available")
+        try:
+            idx = int(element_id)
+        except Exception:
+            return
+        script = """
+(elementId) => {
+  const selectors = [
+    'a','button','input','select','textarea',
+    '[role=button]','[role=link]','[onclick]'
+  ];
+  const elements = Array.from(document.querySelectorAll(selectors.join(',')));
+  let id = 1;
+  for (const el of elements) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) continue;
+    if (id === elementId) {
+      try { el.scrollIntoView({block:'center'}); } catch (e) {}
+      el.click();
+      return true;
+    }
+    id++;
+  }
+  return false;
+}
+"""
+        page.evaluate(script, idx)
+
+    def _capture_desktop_stitch(self, base_path: str, grid_size: int = 6) -> str:
+        if pyautogui is None or Image is None:
+            capture_screenshot_with_grid(base_path, grid_size=grid_size)
+            return base_path
+        stitch_dir = os.path.join(self.data_dir, "vla")
+        os.makedirs(stitch_dir, exist_ok=True)
+        frames = []
+        for i in range(3):
+            path = base_path.replace(".png", f"-part{i}.png")
+            capture_screenshot_with_grid(path, grid_size=grid_size)
+            frames.append(path)
+            try:
+                pyautogui.scroll(-800)
+            except Exception:
+                pass
+            time.sleep(0.4)
+        try:
+            images = [Image.open(p) for p in frames]
+            widths, heights = zip(*(im.size for im in images))
+            total_height = sum(heights)
+            max_width = max(widths)
+            stitched = Image.new("RGB", (max_width, total_height))
+            y = 0
+            for im in images:
+                stitched.paste(im, (0, y))
+                y += im.size[1]
+            stitched.save(base_path)
+        except Exception:
+            capture_screenshot_with_grid(base_path, grid_size=grid_size)
+        return base_path
+    def _build_prompt(self, grid_size: int, dom: list, web_mode: bool) -> str:
         goal = self.state.goal or "Observe the screen and take the next helpful action."
+        dom_text = ""
+        if dom:
+            try:
+                dom_text = json.dumps(dom[:200])
+            except Exception:
+                dom_text = ""
+        dom_hint = ""
+        if dom_text:
+            dom_hint = (
+                "\nDOM_HINT: You also have a simplified DOM list with bounding boxes. "
+                "Prefer using element_id from DOM_HINT when clicking."
+                f"\nDOM_HINT={dom_text}"
+            )
         return (
             "You are a visual control agent. Use the screenshot to choose the next action. "
-            "The screen is overlaid with a numbered grid of size {grid}x{grid}. "
+            "The screen is overlaid with a numbered grid of size {grid}x{grid} (desktop mode). "
             "Cells are numbered left-to-right, top-to-bottom starting at 1. "
             "Return ONLY valid JSON. Allowed actions: click, scroll, wait, stop, type, key, hotkey. "
-            "Prefer using `cell` (grid cell number). If precise pixel coordinates are required, use x and y. "
+            "Prefer using `element_id` (web) or `cell` (desktop). If precise pixel coordinates are required, use x and y. "
             "JSON schema: {\"action\":\"click|scroll|wait|stop|type|key|hotkey\",\"cell\":int,"
-            "\"x\":int,\"y\":int,\"scroll\":int,\"text\":string,\"key\":string,\"hotkey\":[string],\"reason\":string}.\n"
+            "\"x\":int,\"y\":int,\"scroll\":int,\"text\":string,\"key\":string,\"hotkey\":[string],"
+            "\"element_id\":int,\"reason\":string}.\n"
             f"Goal: {goal}"
         ).format(grid=grid_size)
+        + dom_hint
 
-    def _execute_action(self, action: Dict[str, Any], grid_size: int) -> None:
+    def _execute_action(self, action: Dict[str, Any], grid_size: int, web_mode: bool) -> None:
         act = str(action.get("action", "")).lower()
         if pyautogui is None:
             raise RuntimeError("pyautogui not installed")
@@ -309,13 +461,30 @@ class LiveDriver:
             except Exception:
                 pass
 
-        if act == "click" and x is not None and y is not None:
-            pyautogui.click(int(x), int(y))
-            return
+        if act == "click":
+            element_id = action.get("element_id")
+            if web_mode and element_id is not None:
+                self._click_dom_element(element_id)
+                return
+            if x is not None and y is not None:
+                if web_mode and getattr(self.app, "page", None) is not None:
+                    try:
+                        self.app.page.mouse.click(int(x), int(y))
+                        return
+                    except Exception:
+                        pass
+                pyautogui.click(int(x), int(y))
+                return
         if act == "scroll":
             amount = int(_safe_float(action.get("scroll")) or 0)
             if amount == 0:
                 amount = -300
+            if web_mode and getattr(self.app, "page", None) is not None:
+                try:
+                    self.app.page.mouse.wheel(0, amount)
+                    return
+                except Exception:
+                    pass
             pyautogui.scroll(amount)
             return
         if act == "wait":
