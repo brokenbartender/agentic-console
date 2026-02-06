@@ -389,6 +389,36 @@ class HeadlessController:
         except Exception as exc:
             return f"workflow error: {exc}"
 
+    def set_step_approval(self, enabled: bool) -> None:
+        self.app.step_approval_enabled = bool(enabled)
+        try:
+            if hasattr(self.app, "step_approval_var"):
+                self.app.step_approval_var.set(self.app.step_approval_enabled)
+        except Exception:
+            pass
+
+    def save_canvas(self, text: str) -> str:
+        run = self.current_run
+        if not run:
+            return ""
+        base = os.path.join(self.settings.data_dir, "runs", run.run_id)
+        os.makedirs(base, exist_ok=True)
+        path = os.path.join(base, "canvas.md")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text or "")
+        return path
+
+    def load_canvas(self) -> str:
+        run = self.current_run
+        if not run:
+            return ""
+        path = os.path.join(self.settings.data_dir, "runs", run.run_id, "canvas.md")
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return handle.read()
+        except Exception:
+            return ""
+
     def list_runs(self) -> List[Dict[str, Any]]:
         base = os.path.join(self.settings.data_dir, "runs")
         return [summarize_run(os.path.join(base, d)) for d in list_run_dirs(base)]

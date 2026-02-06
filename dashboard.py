@@ -22,7 +22,11 @@ def main_dashboard():
             verifier_badge = ui.badge("Verifier", color="gray").classes("text-xs")
             ui.button("Agent Info", on_click=lambda: show_agent_info()).props("outline")
 
-    with ui.row().classes("w-full h-[calc(100vh-80px)] no-wrap"):
+    nudge_row = ui.row().classes("w-full bg-gray-800/60 p-2 hidden")
+    nudge_label = ui.label("").classes("text-xs text-gray-200")
+    nudge_action = ui.button("Diagnose", on_click=lambda: nudge_fix()).props("flat color=primary")
+
+    with ui.row().classes("w-full h-[calc(100vh-120px)] no-wrap"):
         with ui.column().classes("w-2/3 h-full p-4 gap-4"):
             ui.label("LIVE FEED").classes("text-xs font-bold text-gray-500 mb-2")
             log_container = ui.scroll_area().classes(
@@ -32,17 +36,19 @@ def main_dashboard():
                 input_cmd = ui.input(placeholder="Ask the agent to do anything...").classes(
                     "w-full flex-grow text-lg no-underline"
                 ).props("borderless text-white")
+                upload = ui.upload(on_upload=lambda e: handle_upload(e)).props('auto-upload')
                 ui.button(icon="send", on_click=lambda: run_task(input_cmd.value)).props(
                     "flat round color=primary"
                 )
                 ui.button(icon="mic").props("flat round color=gray")
-                ui.button(icon="attach_file").props("flat round color=gray")
 
         with ui.column().classes("w-1/3 h-full border-l border-gray-800 bg-gray-900/30 p-4"):
             with ui.tabs().classes("w-full") as tabs:
                 tab_plan = ui.tab("Plan")
                 tab_mem = ui.tab("Memory")
                 tab_runs = ui.tab("Runs")
+                tab_canvas = ui.tab("Canvas")
+                tab_think = ui.tab("Thinking")
             with ui.tab_panels(tabs, value=tab_plan).classes("w-full bg-transparent"):
                 with ui.tab_panel(tab_plan):
                     plan_container = ui.column().classes("w-full gap-2")
@@ -50,6 +56,8 @@ def main_dashboard():
                     with ui.row().classes("w-full mt-4 justify-end hidden") as approval_row:
                         ui.button("Reject", color="red", icon="close").props("outline")
                         approve_btn = ui.button("APPROVE RUN", color="green", icon="check")
+                    with ui.row().classes("w-full mt-2 gap-2"):
+                        ui.switch("Approve Writes", value=False, on_change=lambda e: ctrl.set_step_approval(e.value))
                 with ui.tab_panel(tab_mem):
                     ui.label("Active Context").classes("text-sm font-bold")
                     ui.tree(
@@ -68,10 +76,15 @@ def main_dashboard():
                     )
                 with ui.tab_panel(tab_runs):
                     runs_container = ui.column().classes("w-full gap-2")
+                with ui.tab_panel(tab_canvas):
+                    ui.label("Collaborative Canvas").classes("text-sm font-bold")
+                    canvas_area = ui.textarea(placeholder="Drafts, code, notes...").classes("w-full")
+                    ui.button("Save", on_click=lambda: save_canvas()).props("flat color=primary")
+                with ui.tab_panel(tab_think):
+                    thinking_container = ui.column().classes("w-full gap-2")
 
     def show_agent_info():
         info = ctrl.describe_agent()
-        ui.dialog().props("persistent").clear()
         with ui.dialog() as dialog:
             with ui.card().classes("w-full"):
                 ui.label("Agent Info")
@@ -90,6 +103,7 @@ def main_dashboard():
                     "tool": "purple",
                     "agent": "blue",
                     "event": "blue",
+                    "ui": "green",
                 }.get(entry["type"], "blue")
                 icon = {
                     "info": "info",
@@ -98,6 +112,7 @@ def main_dashboard():
                     "tool": "build",
                     "agent": "smart_toy",
                     "event": "bolt",
+                    "ui": "dashboard",
                 }.get(entry["type"], "smart_toy")
                 with ui.row().classes("w-full mb-2 gap-3 items-start"):
                     ui.icon(icon).classes(f"text-{color}-400 mt-1")
@@ -105,7 +120,23 @@ def main_dashboard():
                         ui.label(entry["message"]).classes("text-sm text-gray-200 font-mono")
                         if entry.get("details"):
                             ui.label(str(entry["details"]))
+                        if isinstance(entry.get("details"), dict) and "ui" in entry["details"]:
+                            render_gen_ui(entry["details"]["ui"])
                         ui.label(entry["ts"]).classes("text-[10px] text-gray-600")
+
+    def render_gen_ui(payload: dict):
+        kind = payload.get("type")
+        if kind == "table":
+            rows = payload.get("rows") or []
+            cols = payload.get("columns") or []
+            ui.table(columns=[{"name": c, "label": c, "field": c} for c in cols], rows=rows).classes("w-full")
+        if kind == "cards":
+            for card in payload.get("items") or []:
+                with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
+                    ui.label(card.get("title", ""))
+                    ui.label(card.get("subtitle", ""))
+                    if card.get("button"):
+                        ui.button(card["button"], on_click=lambda: run_task(card.get("action", ""))).props("flat color=primary")
 
     def render_plan():
         plan_container.clear()
@@ -128,18 +159,6 @@ def main_dashboard():
                         ui.label(f"Tool: {step.tool}").classes("text-xs text-gray-400")
                         if step.requires_confirmation:
                             ui.badge("CONFIRM", color="red")
-        else:
-            with plan_container:
-                ui.label(f"Goal: {run.intent.get('goal', 'Unknown')}").classes("font-bold text-primary mb-2")
-                for step in run.plan_steps:
-                    with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
-                        with ui.row().classes("items-center justify-between w-full"):
-                            ui.label(f"{step.step}. {step.action}").classes("font-bold font-mono text-sm")
-                            if step.value == "DONE":
-                                ui.badge("DONE", color="green")
-                            else:
-                                ui.badge("PENDING", color="gray")
-                        ui.label(step.target).classes("text-xs text-gray-400 break-all")
         report = getattr(run, "report", None)
         if report:
             with exec_container:
@@ -162,6 +181,12 @@ def main_dashboard():
                 ui.label(item.get("status", ""))
                 ui.button("Fork", on_click=lambda rid=item.get("run_id", ""): fork_run(rid))
 
+    def render_thinking():
+        thinking_container.clear()
+        with thinking_container:
+            for entry in ctrl.activity_log[-8:]:
+                ui.label(f"• {entry['message']}").classes("text-xs text-gray-400")
+
     def fork_run(run_id: str):
         goal = ctrl.load_run_goal(run_id)
         if goal:
@@ -177,10 +202,29 @@ def main_dashboard():
         executor_badge.props(f"color={'purple' if executor_active else 'gray'}")
         verifier_badge.props(f"color={'green' if verifier_active else 'gray'}")
 
+    def render_nudges():
+        latest_error = next((e for e in reversed(ctrl.activity_log) if e.get("type") == "error"), None)
+        if latest_error:
+            nudge_row.classes(remove="hidden")
+            nudge_label.text = "I saw an error. Want me to diagnose it?"
+        else:
+            nudge_row.classes(add="hidden")
+
+    def nudge_fix():
+        ctrl.plan_task("Diagnose the most recent error and propose a fix.")
+        render_plan()
+
+    def save_canvas():
+        ctrl.save_canvas(canvas_area.value or "")
+
+    def handle_upload(e):
+        ctrl.log(f"Uploaded: {e.name}", type="info")
+
     async def run_task(text):
         if not text:
             return
         input_cmd.value = ""
+        ctrl.log("Queued: " + text, type="info")
         ctrl.plan_task(text)
         render_logs()
         render_plan()
@@ -189,7 +233,9 @@ def main_dashboard():
     ui.timer(1.0, render_logs)
     ui.timer(1.0, render_plan)
     ui.timer(1.0, render_runs)
+    ui.timer(1.0, render_thinking)
     ui.timer(1.0, render_activity)
+    ui.timer(1.0, render_nudges)
 
 def run_dashboard():
     ui.run(title="Agentic Console", dark=True, port=8333)
