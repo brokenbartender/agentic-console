@@ -256,7 +256,18 @@ class HeadlessController:
                 err = ""
                 out_preview = ""
                 try:
+                    # Observe before UI actions if using computer tool.
+                    if step.tool == "computer":
+                        try:
+                            self.app._execute_tool("computer", json.dumps({"mode": "observe", "out_dir": os.path.join(self.settings.data_dir, "runs", run.run_id)}))
+                        except Exception:
+                            pass
                     self.app._execute_step(command)
+                    if step.tool == "computer":
+                        try:
+                            self.app._execute_tool("computer", json.dumps({"mode": "observe", "out_dir": os.path.join(self.settings.data_dir, "runs", run.run_id)}))
+                        except Exception:
+                            pass
                     ok = True
                     out_preview = f"{command}"
                 except Exception as exc:
