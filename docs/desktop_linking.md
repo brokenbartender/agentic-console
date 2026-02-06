@@ -203,3 +203,28 @@ After that, from codex-work, test:
 ssh -i $env:USERPROFILE\.ssh\codydesktop codym@100.111.161.110
 ```
 
+---
+
+## Desktop Codex CLI Prompt (Copy/Paste)
+Paste the following into Codex CLI on **CODYDESKTOP**:
+
+```
+You are on CODYDESKTOP. Your job is to finish SSH linking to codex-work and report verification output back.
+
+1) Open PowerShell as Administrator and run:
+New-Item -ItemType File -Path C:\ProgramData\ssh\administrators_authorized_keys -Force
+icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r
+icacls C:\ProgramData\ssh\administrators_authorized_keys /grant "Administrators:F"
+icacls C:\ProgramData\ssh\administrators_authorized_keys /grant "SYSTEM:F"
+Add-Content -Path C:\ProgramData\ssh\administrators_authorized_keys -Value 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKnHxexuAbVPO3dp9c/gzXKRtv+NdK+m8YULemImsDb6 codym@Work'
+Restart-Service sshd
+
+2) Verify desktop-side SSH state and paste the output:
+Get-Content -Path C:\ProgramData\ssh\administrators_authorized_keys | Select-String -Pattern 'codym@Work'
+icacls C:\ProgramData\ssh\administrators_authorized_keys
+Get-Service sshd | Select-Object -Property Status,Name,StartType
+Get-NetTCPConnection -LocalPort 22 -State Listen | Select-Object -First 2
+
+3) Confirm: "CODYDESKTOP side complete" and paste all command outputs.
+```
+
