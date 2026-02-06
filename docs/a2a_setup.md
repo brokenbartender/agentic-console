@@ -39,6 +39,10 @@ In the desktop UI log:
 A2A network listening on http://0.0.0.0:9451/a2a
 ```
 
+## Note (startup log guard)
+If you recently updated and saw a crash during startup, ensure you are on the latest commit.
+There was a fix to allow early A2A log messages before the UI log widget initializes.
+
 ## 6) Test messages (from work)
 ```
 a2a_peers
