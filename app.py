@@ -1873,6 +1873,12 @@ class AgentApp:
         profile = getattr(self, "agent_profile", "")
         if profile:
             oi_interpreter.system_message += f" Current profile: {profile}."
+        try:
+            user_profile = self.memory.get_user_profile("default")
+            if user_profile:
+                oi_interpreter.system_message += f" User profile: {json.dumps(user_profile)}."
+        except Exception:
+            pass
 
         context = self.retriever.retrieve(instruction)
 
@@ -1935,6 +1941,19 @@ class AgentApp:
         if result and isinstance(result, str):
 
             output = (output + "\n" + result).strip() if output else result.strip()
+
+        # Swarm-style handoff (detect JSON with handoff_to)
+        try:
+            if output.startswith("{") and output.endswith("}"):
+                payload = json.loads(output)
+                if payload.get("handoff_to"):
+                    peer = payload.get("handoff_to")
+                    msg = payload.get("message") or payload.get("text") or ""
+                    if peer and msg:
+                        self.a2a_net.send(peer, getattr(self, "node_name", "work"), "remote", {"type": "chat", "text": msg})
+                        output = f"Handoff to {peer}: {msg}"
+        except Exception:
+            pass
 
         if output:
 
@@ -2179,6 +2198,12 @@ class AgentApp:
                         try:
 
                             self.rag.index_file(full)
+                            try:
+                                summary = self._agent_chat(f"Summarize new file: {full}")
+                                if summary:
+                                    self._broadcast_memory_sync({"kind": "file_summary", "content": summary})
+                            except Exception:
+                                pass
 
                             count += 1
 
@@ -2191,6 +2216,12 @@ class AgentApp:
                 return
 
             self.rag.index_file(path)
+            try:
+                summary = self._agent_chat(f"Summarize new file: {path}")
+                if summary:
+                    self._broadcast_memory_sync({"kind": "file_summary", "content": summary})
+            except Exception:
+                pass
 
             self.log_line(f"Indexed {path}")
 
@@ -2599,7 +2630,7 @@ class AgentApp:
                 return
             name, payload = [s.strip() for s in raw.split("|", 1)]
             try:
-                output = run_workflow(name, payload)
+                output = run_workflow(name, payload, data_dir=self.settings.data_dir)
                 self.log_line(output)
             except Exception as exc:
                 self.log_line(f"workflow error: {exc}")

@@ -242,6 +242,15 @@ class MemoryStore:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                user_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at REAL NOT NULL,
@@ -755,6 +764,28 @@ class MemoryStore:
             {"id": rid, "timestamp": ts, "label": label, "notes": notes or ""}
             for (rid, ts, label, notes) in rows
         ]
+
+    def get_user_profile(self, user_id: str = "default") -> Dict[str, str]:
+        cur = self._conn.cursor()
+        cur.execute("SELECT payload FROM user_profiles WHERE user_id=?", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return {}
+        try:
+            return json.loads(row[0])
+        except Exception:
+            return {}
+
+    def update_user_profile(self, updates: Dict[str, str], user_id: str = "default") -> None:
+        current = self.get_user_profile(user_id)
+        current.update(updates or {})
+        payload = json.dumps(current)
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO user_profiles (user_id, payload, updated_at) VALUES (?, ?, ?)",
+            (user_id, payload, time.time()),
+        )
+        self._conn.commit()
 
     def recent_events(self, limit: int = 50) -> List[Dict[str, str]]:
         cur = self._conn.cursor()

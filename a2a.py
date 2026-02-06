@@ -50,3 +50,15 @@ class A2ABus:
             }
             for r in rows
         ]
+
+
+class Handoff:
+    def __init__(self, to: str, message: str) -> None:
+        self.to = to
+        self.message = message
+
+
+class Result:
+    def __init__(self, message: str = "", handoff_to: str | None = None) -> None:
+        self.message = message
+        self.handoff_to = handoff_to
