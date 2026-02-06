@@ -1,6 +1,6 @@
 # Agentic Console
 
-Agentic Console is a local agent operating system: one chat UI, multiple agents behind the scenes, and a clear safety model.
+Agentic Console is a local agent operating system: one chat UI, two-agent plan/execute loop, and a clear safety model.
 
 ## 60-second quickstart
 
@@ -25,17 +25,17 @@ http://127.0.0.1:8333
 ## What problem this solves
 
 - Run complex tasks through a single chat interface.
-- Agents plan, execute, and report outcomes with approvals for risky actions.
-- Memory and workflows are persisted locally.
+- The planner creates a structured plan; the executor runs it.
+- Approvals are required for risky actions.
 
-## One canonical runtime
+## Canonical runtime
 
 Everything runs through `runtime/run.py` and the lifecycle loop in `runtime/lifecycle.py`.
 
 Examples:
 
 ```
-python C:\Users\codym\AgenticConsole\runtime\run.py run "analyze this repo and summarize risks"
+python C:\Users\codym\AgenticConsole\runtime\run.py run "analyze this repo and summarize risks" --two-agent
 python C:\Users\codym\AgenticConsole\runtime\run.py agent tools
 python C:\Users\codym\AgenticConsole\runtime\run.py memory show
 python C:\Users\codym\AgenticConsole\runtime\run.py workflow list
@@ -65,10 +65,6 @@ Automatic peer handshakes are **off** by default. To enable:
 ```
 set AGENTIC_A2A_HANDSHAKE=true
 ```
-
-### Default UI
-
-`app.py` launches the NiceGUI dashboard by default (set `AGENTIC_UI=tk` to force legacy UI).
 
 ### Headless + NiceGUI Dashboard
 

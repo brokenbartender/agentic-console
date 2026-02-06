@@ -43,6 +43,7 @@ def main_dashboard():
             with ui.tab_panels(tabs, value=tab_plan).classes("w-full bg-transparent"):
                 with ui.tab_panel(tab_plan):
                     plan_container = ui.column().classes("w-full gap-2")
+                    exec_container = ui.column().classes("w-full gap-2")
                     with ui.row().classes("w-full mt-4 justify-end hidden") as approval_row:
                         ui.button("Reject", color="red", icon="close").props("outline")
                         approve_btn = ui.button("APPROVE RUN", color="green", icon="check")
@@ -93,23 +94,45 @@ def main_dashboard():
 
     def render_plan():
         plan_container.clear()
+        exec_container.clear()
         run = ctrl.current_run
         if not run:
             with plan_container:
                 ui.label("No active plan").classes("text-gray-600 italic")
             approval_row.classes(add="hidden")
             return
-        with plan_container:
-            ui.label(f"Goal: {run.intent.get('goal', 'Unknown')}").classes("font-bold text-primary mb-2")
-            for step in run.plan_steps:
-                with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
-                    with ui.row().classes("items-center justify-between w-full"):
-                        ui.label(f"{step.step}. {step.action}").classes("font-bold font-mono text-sm")
-                        if step.value == "DONE":
-                            ui.badge("DONE", color="green")
-                        else:
-                            ui.badge("PENDING", color="gray")
-                    ui.label(step.target).classes("text-xs text-gray-400 break-all")
+        plan_schema = getattr(run, "plan_schema", None)
+        if plan_schema:
+            with plan_container:
+                ui.label(f"Goal: {plan_schema.goal}").classes("font-bold text-primary mb-2")
+                for step in plan_schema.steps:
+                    with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
+                        with ui.row().classes("items-center justify-between w-full"):
+                            ui.label(f"{step.step_id}. {step.title}").classes("font-bold font-mono text-sm")
+                            ui.badge(step.risk.upper(), color="gray" if step.risk == "safe" else "orange")
+                        ui.label(f"Tool: {step.tool}").classes("text-xs text-gray-400")
+                        if step.requires_confirmation:
+                            ui.badge("CONFIRM", color="red")
+        else:
+            with plan_container:
+                ui.label(f"Goal: {run.intent.get('goal', 'Unknown')}").classes("font-bold text-primary mb-2")
+                for step in run.plan_steps:
+                    with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
+                        with ui.row().classes("items-center justify-between w-full"):
+                            ui.label(f"{step.step}. {step.action}").classes("font-bold font-mono text-sm")
+                            if step.value == "DONE":
+                                ui.badge("DONE", color="green")
+                            else:
+                                ui.badge("PENDING", color="gray")
+                        ui.label(step.target).classes("text-xs text-gray-400 break-all")
+        report = getattr(run, "report", None)
+        if report:
+            with exec_container:
+                ui.label("Execution Report").classes("text-sm font-bold")
+                ui.label(f"Status: {report.status}").classes("text-xs text-gray-400")
+                for step in report.steps:
+                    with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
+                        ui.label(f"{step.step_id}. {step.title} → {step.status}").classes("text-xs")
         if run.status == "planned":
             approval_row.classes(remove="hidden")
             approve_btn.on_click(lambda: (ctrl.approve_run(run.run_id), render_plan()))
@@ -119,7 +142,6 @@ def main_dashboard():
         planner_active = "planning" in text_blob or "plan created" in text_blob
         executor_active = "starting execution" in text_blob or "step" in text_blob
         verifier_active = "verify" in text_blob or "verified" in text_blob
-        planner_badge.classes(remove="bg-gray", add="")
         planner_badge.props(f"color={'blue' if planner_active else 'gray'}")
         executor_badge.props(f"color={'purple' if executor_active else 'gray'}")
         verifier_badge.props(f"color={'green' if verifier_active else 'gray'}")

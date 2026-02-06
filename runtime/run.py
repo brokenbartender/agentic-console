@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-from typing import Any
 
 from controller import HeadlessController
 from runtime.lifecycle import run_lifecycle
@@ -11,6 +9,10 @@ from runtime.lifecycle import run_lifecycle
 
 def cmd_run(args) -> None:
     ctrl = HeadlessController()
+    if args.two_agent:
+        report = ctrl.run_two_agent(args.message, max_loops=2)
+        print(json.dumps(report.__dict__, indent=2, default=str))
+        return
     res = run_lifecycle(ctrl, args.message, approve=not args.no_approve, wait=True)
     print(res.summary)
 
@@ -68,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Run a task")
     run.add_argument("message", help="User message")
     run.add_argument("--no-approve", action="store_true", help="Do not auto-approve")
+    run.add_argument("--two-agent", action="store_true", help="Use two-agent loop")
     run.set_defaults(func=cmd_run)
 
     agent = sub.add_parser("agent", help="Agent introspection")

@@ -174,6 +174,8 @@ class TaskRun:
     run_id: str
     intent: Dict[str, str]
     plan_steps: List[PlanStep]
+    plan_schema: object | None = None
+    report: object | None = None
     approved: bool = False
     mode: str = "demo"
     status: str = "planned"
