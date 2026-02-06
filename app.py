@@ -757,6 +757,7 @@ class AgentApp:
     def _build_terminal_tab(self, parent) -> None:
         self._terminal_process = None
         self._terminal_queue = queue.Queue()
+        self._terminal_autorun_done = False
 
         status_row = ttk.Frame(parent)
         status_row.pack(fill=tk.X, pady=4)
@@ -782,6 +783,7 @@ class AgentApp:
         hint.pack(anchor=tk.W, padx=4, pady=2)
 
         self.root.after(200, self._terminal_pump)
+        self._terminal_maybe_autorun()
 
     def _terminal_clear(self) -> None:
         self.term_text.configure(state=tk.NORMAL)
@@ -841,6 +843,18 @@ class AgentApp:
         except Exception:
             pass
         self.root.after(200, self._terminal_pump)
+
+    def _terminal_maybe_autorun(self) -> None:
+        if self._terminal_autorun_done:
+            return
+        if os.getenv("AGENTIC_TERMINAL_AUTORUN", "true").lower() not in ("1", "true", "yes", "on"):
+            return
+        cmd = os.getenv("AGENTIC_TERMINAL_AUTORUN_CMD", "codex danger-full-access")
+        if not cmd:
+            return
+        self._terminal_autorun_done = True
+        self.term_input_var.set(cmd)
+        self._terminal_run()
 
     def _debate_step(self, step: str) -> bool:
         try:
