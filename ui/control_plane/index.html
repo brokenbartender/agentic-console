@@ -263,6 +263,24 @@
         font-size: 13px;
       }
 
+      .ui-card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        background: #f2f7ff;
+        margin-top: 8px;
+      }
+
+      .ui-card h4 {
+        margin: 0 0 6px 0;
+      }
+
+      .ui-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
       .a2a {
         grid-column: 3 / 4;
         max-height: 380px;
@@ -424,7 +442,9 @@
         const el = document.getElementById("events");
         el.innerHTML = items.map((e) => {
           const payload = JSON.stringify(e.payload || {}, null, 2);
-          return `<details class="event"><summary><strong>${e.event_type}</strong></summary><div class="mono">${payload}</div></details>`;
+          const ui = extractUI(e.payload || {});
+          const uiHtml = ui ? renderUICard(ui) : "";
+          return `<details class="event"><summary><strong>${e.event_type}</strong></summary><div class="mono">${payload}</div>${uiHtml}</details>`;
         }).join("");
       }
 
@@ -528,6 +548,44 @@
           }
         }
         return null;
+      }
+
+      function extractUI(payload) {
+        const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
+        const fenced = raw.match(/```ui([\\s\\S]*?)```/i);
+        if (fenced) {
+          try { return JSON.parse(fenced[1]); } catch { return null; }
+        }
+        const inline = raw.match(/\\\"ui\\\"\\s*:\\s*(\\{[\\s\\S]*\\})/i);
+        if (inline) {
+          try { return JSON.parse(inline[1]); } catch { return null; }
+        }
+        return null;
+      }
+
+      function renderUICard(ui) {
+        if (!ui || typeof ui !== "object") return "";
+        if (ui.type === "flight_card") {
+          return `
+            <div class="ui-card">
+              <h4>Flight</h4>
+              <div class="ui-row"><strong>${ui.from} → ${ui.to}</strong></div>
+              <div class="ui-row">Date: ${ui.date || "TBD"}</div>
+              <div class="ui-row">Price: ${ui.price || "—"}</div>
+              <button class="secondary">Select</button>
+            </div>`;
+        }
+        if (ui.type === "date_picker") {
+          return `
+            <div class="ui-card">
+              <h4>Date Picker</h4>
+              <div class="ui-row">
+                <input type="date" />
+                <button class="secondary">Apply</button>
+              </div>
+            </div>`;
+        }
+        return `<div class="ui-card"><pre class="mono">${JSON.stringify(ui, null, 2)}</pre></div>`;
       }
 
       function showArtifact(mode) {
