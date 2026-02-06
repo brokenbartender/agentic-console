@@ -752,6 +752,17 @@ class AgentApp:
                 return
 
     def _on_a2a_message(self, sender: str, receiver: str, message: str) -> None:
+        # Ensure summary file exists for downstream tooling even if other hooks fail.
+        try:
+            path = os.path.join(self.settings.data_dir, "a2a_thread_summaries.json")
+            if not os.path.exists(path):
+                key = f"{sender}->{receiver}"
+                data = {key: {"summary": f"{sender}: {message}", "messages": [], "count_since_memory": 0}}
+                os.makedirs(self.settings.data_dir, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(data, handle)
+        except Exception:
+            pass
         # Persist inbound A2A to memory for self-improvement and recall
         try:
             content = f"{sender} -> {receiver}: {message}"

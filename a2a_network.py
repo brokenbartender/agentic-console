@@ -93,6 +93,7 @@ class A2ANetwork:
     def _make_handler(self):
         bus = self.bus
         shared_secret = self.shared_secret
+        on_message = self.on_message
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
