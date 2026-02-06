@@ -37,11 +37,32 @@ async def _a2a_stream() -> None:
         await cl.sleep(1)
 
 
+async def _event_stream() -> None:
+    last_ts = 0.0
+    while True:
+        try:
+            events = engine.memory.get_recent_events(20)
+            for ev in reversed(events):
+                ts = float(ev.get("timestamp", 0))
+                if ts <= last_ts:
+                    continue
+                last_ts = ts
+                etype = ev.get("type") or ev.get("event_type")
+                payload = ev.get("payload")
+                await cl.Step(name="Event", type="tool").send(
+                    output=json.dumps({"type": etype, "payload": payload}, indent=2)
+                )
+        except Exception:
+            pass
+        await cl.sleep(2)
+
+
 @cl.on_chat_start
 async def start() -> None:
     cl.user_session.set("started", True)
     await cl.Message(content="Mission Control ready.").send()
     cl.user_session.set("a2a_task", cl.create_task(_a2a_stream()))
+    cl.user_session.set("event_task", cl.create_task(_event_stream()))
 
 
 @cl.on_message

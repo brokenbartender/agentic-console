@@ -47,10 +47,16 @@ python -m pip install pyttsx3
 - `listen [seconds]`: record audio and transcribe with Whisper (opt-in)
 - `speak <text>`: text-to-speech alert (requires pyttsx3)
 - `perception [path]`: capture a lightweight observation (optional screenshot)
+- `uia_snapshot [path]`: capture a Windows UI Automation snapshot (requires pywinauto)
+- `som_detect <image_path> [out_path]`: detect UI boxes via OmniParser-compatible endpoint
 - `explain <query>`: show routing + memory/evidence hints
 - `telemetry`: show metrics snapshot
 - `autonomy <level>`: set autonomy (supervised|semi|autonomous)
 - `workflow <name> | <payload>`: run a deterministic workflow
+- `workflow_record start <name> | stop | list`: record a workflow
+- `workflow_run <name>`: replay a recorded workflow
+- `browser_use <task>`: run browser-use agent (if installed)
+- `workflow_use <path> [goal]`: run workflow-use (if installed)
 - `slow_mode on|off`: enable deliberate System 2 pass
 - `dot_mode on|off`: enable diversity-of-thoughts drafting
 - `graph_query <entity>`: query GraphRAG neighbors for an entity
@@ -174,6 +180,14 @@ AGENTIC_VLA_READONLY=true
 AGENTIC_VLA_PAUSE_KEY=f9
 AGENTIC_VLA_MODE=auto
 AGENTIC_VLA_STITCH=false
+AGENTIC_VLA_FRAMES=1
+AGENTIC_VLA_TILES=1
+AGENTIC_VLA_EXPLORE=false
+AGENTIC_SOM_ENDPOINT=http://127.0.0.1:8000/detect
+AGENTIC_NET_LOG=false
+AGENTOPS_API_KEY=...
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces
+OTEL_SERVICE_NAME=agentic-console
 MCP_GITHUB_URL=http://localhost:9000/github
 MCP_DRIVE_URL=http://localhost:9000/drive
 GITHUB_TOKEN=...

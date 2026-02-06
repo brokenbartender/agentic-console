@@ -24,6 +24,11 @@ except Exception:
     keyboard = None
 
 try:
+    import requests
+except Exception:
+    requests = None
+
+try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
@@ -38,6 +43,8 @@ class VLAState:
     last_reason: str = ""
     last_image: str = ""
     last_dom: list = field(default_factory=list)
+    last_som: list = field(default_factory=list)
+    last_frames: list = field(default_factory=list)
     running: bool = False
     paused: bool = False
 
@@ -81,19 +88,21 @@ class VisionModel:
         self._client = OpenAI(**kwargs)
         self._model = model
 
-    def decide(self, prompt: str, image_path: str) -> str:
+    def decide(self, prompt: str, image_path: str, extra_images: Optional[list] = None) -> str:
         data_url = encode_image_data_url(image_path)
+        content = [
+            {"type": "input_text", "text": prompt},
+            {"type": "input_image", "image_url": data_url},
+        ]
+        if extra_images:
+            for path in extra_images[:5]:
+                try:
+                    content.append({"type": "input_image", "image_url": encode_image_data_url(path)})
+                except Exception:
+                    continue
         resp = self._client.responses.create(
             model=self._model,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": data_url},
-                    ],
-                }
-            ],
+            input=[{"role": "user", "content": content}],
         )
         text = getattr(resp, "output_text", None)
         if isinstance(text, str) and text.strip():
@@ -177,6 +186,8 @@ class LiveDriver:
             "last_reason": self.state.last_reason,
             "last_image": self.state.last_image,
             "last_dom_elements": len(self.state.last_dom),
+            "last_som_elements": len(self.state.last_som),
+            "last_frames": len(self.state.last_frames),
         }
 
     def _loop(self) -> None:
@@ -201,6 +212,10 @@ class LiveDriver:
         ]
         read_only = _parse_bool(os.getenv("AGENTIC_VLA_READONLY", "true"), True)
         stitch_desktop = _parse_bool(os.getenv("AGENTIC_VLA_STITCH", "false"), False)
+        som_endpoint = os.getenv("AGENTIC_SOM_ENDPOINT", "").strip()
+        frames = max(1, int(os.getenv("AGENTIC_VLA_FRAMES", "1")))
+        tiles = max(1, int(os.getenv("AGENTIC_VLA_TILES", "1")))
+        explore = _parse_bool(os.getenv("AGENTIC_VLA_EXPLORE", "false"), False)
         pause_key = os.getenv("AGENTIC_VLA_PAUSE_KEY", "f9").strip().lower()
         pause_file = os.path.join(self.data_dir, "vla.pause")
         stop_file = os.path.join(self.data_dir, "vla.stop")
@@ -258,11 +273,24 @@ class LiveDriver:
 
             self.state.last_image = image_path
             self.state.last_dom = dom or []
+            self.state.last_frames = []
 
-            prompt = self._build_prompt(grid_size, dom, web_mode)
+            extra_images = self._capture_temporal_frames(image_path, frames, web_mode)
+            if extra_images:
+                self.state.last_frames = list(extra_images)
+
+            if tiles > 1:
+                extra_images.extend(self._tile_image(image_path, tiles))
+
+            som = []
+            if som_endpoint:
+                som = self._som_detect(som_endpoint, image_path)
+            self.state.last_som = som or []
+
+            prompt = self._build_prompt(grid_size, dom, som, web_mode)
             reply = ""
             try:
-                reply = self._model.decide(prompt, image_path)
+                reply = self._model.decide(prompt, image_path, extra_images=extra_images)
             except Exception as exc:
                 self.app.log_line(f"VLA model error: {exc}")
                 time.sleep(interval)
@@ -270,7 +298,10 @@ class LiveDriver:
 
             action = _extract_json(reply)
             if not action:
-                self.app.log_line("VLA: no action parsed.")
+                if explore:
+                    self._execute_action({"action": "scroll", "scroll": -400}, grid_size, web_mode)
+                else:
+                    self.app.log_line("VLA: no action parsed.")
                 time.sleep(interval)
                 continue
 
@@ -313,6 +344,71 @@ class LiveDriver:
         dom = self._snapshot_dom(page)
         return dom
 
+    def _capture_temporal_frames(self, base_path: str, frames: int, web_mode: bool) -> list:
+        if frames <= 1:
+            return []
+        extra = []
+        for i in range(frames - 1):
+            path = base_path.replace(".png", f"-t{i}.png")
+            try:
+                if web_mode and getattr(self.app, "page", None) is not None:
+                    try:
+                        self.app.page.screenshot(path=path, full_page=True)
+                    except Exception:
+                        self.app.page.screenshot(path=path)
+                else:
+                    capture_screenshot_with_grid(path)
+                extra.append(path)
+            except Exception:
+                continue
+            time.sleep(0.25)
+        return extra
+
+    def _tile_image(self, path: str, tiles: int) -> list:
+        if Image is None or tiles <= 1:
+            return []
+        try:
+            img = Image.open(path)
+        except Exception:
+            return []
+        w, h = img.size
+        cols = tiles
+        rows = tiles
+        tw = w // cols
+        th = h // rows
+        out = []
+        idx = 0
+        for r in range(rows):
+            for c in range(cols):
+                left = c * tw
+                top = r * th
+                right = w if c == cols - 1 else (c + 1) * tw
+                bottom = h if r == rows - 1 else (r + 1) * th
+                crop = img.crop((left, top, right, bottom))
+                tile_path = path.replace(".png", f"-tile{idx}.png")
+                crop.save(tile_path)
+                out.append(tile_path)
+                idx += 1
+        return out
+
+    def _som_detect(self, endpoint: str, image_path: str) -> list:
+        if requests is None:
+            return []
+        try:
+            with open(image_path, "rb") as handle:
+                files = {"file": handle}
+                resp = requests.post(endpoint, files=files, timeout=10)
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+            if isinstance(data, dict):
+                return data.get("boxes") or data.get("elements") or []
+            if isinstance(data, list):
+                return data
+        except Exception:
+            return []
+        return []
+
     def _snapshot_dom(self, page) -> list:
         script = """
 (() => {
@@ -321,26 +417,43 @@ class LiveDriver:
     'a','button','input','select','textarea',
     '[role=button]','[role=link]','[onclick]'
   ];
-  const elements = Array.from(document.querySelectorAll(selectors.join(',')));
   let id = 1;
-  for (const el of elements) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 2 || rect.height < 2) continue;
-    const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
-    const item = {
-      element_id: id++,
-      tag: el.tagName.toLowerCase(),
-      text: text.slice(0, 120),
-      aria: (el.getAttribute('aria-label') || '').slice(0, 120),
-      href: (el.getAttribute('href') || '').slice(0, 200),
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      w: Math.round(rect.width),
-      h: Math.round(rect.height),
-    };
-    nodes.push(item);
-    if (nodes.length >= 200) break;
+
+  function collect(root) {
+    if (!root) return;
+    const elements = Array.from(root.querySelectorAll(selectors.join(',')));
+    for (const el of elements) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) continue;
+      const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+      const item = {
+        element_id: id++,
+        tag: el.tagName.toLowerCase(),
+        text: text.slice(0, 120),
+        aria: (el.getAttribute('aria-label') || '').slice(0, 120),
+        href: (el.getAttribute('href') || '').slice(0, 200),
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+      };
+      nodes.push(item);
+      if (nodes.length >= 200) return;
+    }
+    const all = root.querySelectorAll('*');
+    for (const el of all) {
+      if (nodes.length >= 200) return;
+      if (el.shadowRoot) collect(el.shadowRoot);
+      if (el.tagName === 'IFRAME') {
+        try {
+          const doc = el.contentDocument;
+          if (doc) collect(doc);
+        } catch (e) {}
+      }
+    }
   }
+
+  collect(document);
   return nodes;
 })();
 """
@@ -410,7 +523,7 @@ class LiveDriver:
         except Exception:
             capture_screenshot_with_grid(base_path, grid_size=grid_size)
         return base_path
-    def _build_prompt(self, grid_size: int, dom: list, web_mode: bool) -> str:
+    def _build_prompt(self, grid_size: int, dom: list, som: list, web_mode: bool) -> str:
         goal = self.state.goal or "Observe the screen and take the next helpful action."
         dom_text = ""
         if dom:
@@ -418,6 +531,12 @@ class LiveDriver:
                 dom_text = json.dumps(dom[:200])
             except Exception:
                 dom_text = ""
+        som_text = ""
+        if som:
+            try:
+                som_text = json.dumps(som[:200])
+            except Exception:
+                som_text = ""
         dom_hint = ""
         if dom_text:
             dom_hint = (
@@ -425,7 +544,14 @@ class LiveDriver:
                 "Prefer using element_id from DOM_HINT when clicking."
                 f"\nDOM_HINT={dom_text}"
             )
-        return (
+        som_hint = ""
+        if som_text:
+            som_hint = (
+                "\nSOM_HINT: You also have visual element boxes with labels. "
+                "Prefer using label_id from SOM_HINT when clicking."
+                f"\nSOM_HINT={som_text}"
+            )
+        prompt = (
             "You are a visual control agent. Use the screenshot to choose the next action. "
             "The screen is overlaid with a numbered grid of size {grid}x{grid} (desktop mode). "
             "Cells are numbered left-to-right, top-to-bottom starting at 1. "
@@ -433,10 +559,10 @@ class LiveDriver:
             "Prefer using `element_id` (web) or `cell` (desktop). If precise pixel coordinates are required, use x and y. "
             "JSON schema: {\"action\":\"click|scroll|wait|stop|type|key|hotkey\",\"cell\":int,"
             "\"x\":int,\"y\":int,\"scroll\":int,\"text\":string,\"key\":string,\"hotkey\":[string],"
-            "\"element_id\":int,\"reason\":string}.\n"
+            "\"element_id\":int,\"label_id\":int,\"reason\":string}.\n"
             f"Goal: {goal}"
         ).format(grid=grid_size)
-        + dom_hint
+        return prompt + dom_hint + som_hint
 
     def _execute_action(self, action: Dict[str, Any], grid_size: int, web_mode: bool) -> None:
         act = str(action.get("action", "")).lower()
@@ -447,6 +573,28 @@ class LiveDriver:
         x = _safe_float(action.get("x"))
         y = _safe_float(action.get("y"))
         cell = action.get("cell")
+        label_id = action.get("label_id")
+        if (x is None or y is None) and label_id is not None and self.state.last_som:
+            try:
+                lid = int(label_id)
+                for item in self.state.last_som:
+                    if not isinstance(item, dict):
+                        continue
+                    item_id = item.get("label_id") or item.get("id") or item.get("index")
+                    if item_id is None:
+                        continue
+                    if int(item_id) != lid:
+                        continue
+                    bx = item.get("x") or (item.get("box", {}) if isinstance(item.get("box"), dict) else {}).get("x")
+                    by = item.get("y") or (item.get("box", {}) if isinstance(item.get("box"), dict) else {}).get("y")
+                    bw = item.get("w") or (item.get("box", {}) if isinstance(item.get("box"), dict) else {}).get("w")
+                    bh = item.get("h") or (item.get("box", {}) if isinstance(item.get("box"), dict) else {}).get("h")
+                    if bx is not None and by is not None and bw is not None and bh is not None:
+                        x = float(bx) + float(bw) / 2
+                        y = float(by) + float(bh) / 2
+                        break
+            except Exception:
+                pass
         if (x is None or y is None) and cell is not None:
             try:
                 cell_idx = int(cell)

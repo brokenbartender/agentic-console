@@ -13,6 +13,7 @@ class ToolCall:
     step_id: int | None
     timestamp: float
     dry_run: bool = False
+    trace_id: str = ""
 
 
 @dataclass
@@ -22,6 +23,7 @@ class TaskEvent:
     step_id: int | None
     payload: Dict[str, Any]
     timestamp: float
+    trace_id: str = ""
 
 
 @dataclass
@@ -39,3 +41,4 @@ class RunHeartbeat:
     run_id: str
     status: str
     timestamp: float
+    trace_id: str = ""

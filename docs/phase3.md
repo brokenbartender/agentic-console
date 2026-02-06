@@ -31,6 +31,14 @@ AGENTIC_VLA_ACTIONS=click,scroll,wait,stop
 AGENTIC_VLA_PAUSE_KEY=f9
 AGENTIC_VLA_MODE=auto
 AGENTIC_VLA_STITCH=false
+AGENTIC_VLA_FRAMES=1
+AGENTIC_VLA_TILES=1
+AGENTIC_VLA_EXPLORE=false
+AGENTIC_SOM_ENDPOINT=http://127.0.0.1:8000/detect
+AGENTIC_NET_LOG=false
+AGENTOPS_API_KEY=...
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces
+OTEL_SERVICE_NAME=agentic-console
 ```
 Commands: `vla start|stop|pause|resume|goal <text>|status`.
 

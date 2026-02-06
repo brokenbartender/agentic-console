@@ -19,6 +19,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import io
+import uuid
 import subprocess
 
 import contextlib
@@ -41,6 +42,8 @@ from logger import setup_logging
 
 from metrics import Metrics
 from telemetry_langfuse import LangfuseClient
+from telemetry_agentops import AgentOpsClient
+from telemetry_otel import OTelTracer
 
 from task_queue import TaskQueue
 
@@ -57,6 +60,10 @@ from deep_research import DeepResearch
 
 from multimodal import ocr_pdf, capture_screenshot
 from vla import LiveDriver
+from ui_automation import snapshot_uia, write_snapshot
+from som_client import save as som_save
+from browser_use_adapter import BrowserUseAdapter, WorkflowUseAdapter
+from workflow_recorder import WorkflowRecorder
 from audio_io import record_and_transcribe, speak_text
 from cost import estimate_tokens
 from cognitive import slow_mode, dot_ensemble
@@ -174,6 +181,7 @@ class TaskRun:
     actions_path: str = ""
     screenshots_dir: str = ""
     extracted_path: str = ""
+    trace_id: str = ""
 
 
 
@@ -301,6 +309,8 @@ class AgentApp:
 
         self.metrics = engine.metrics
         self.langfuse = LangfuseClient()
+        self.agentops = AgentOpsClient()
+        self.otel = OTelTracer()
         self.task_queue = engine.task_queue
 
 
@@ -430,6 +440,10 @@ class AgentApp:
         tool_prefixes.append("pillars")
         tool_prefixes.append("vertical_agents")
         tool_prefixes.append("workflow")
+        tool_prefixes.append("workflow_record")
+        tool_prefixes.append("workflow_run")
+        tool_prefixes.append("browser_use")
+        tool_prefixes.append("workflow_use")
         tool_prefixes.append("slow_mode")
         tool_prefixes.append("dot_mode")
         tool_prefixes.append("graph_query")
@@ -438,6 +452,8 @@ class AgentApp:
         tool_prefixes.append("graph_add")
         tool_prefixes.append("graph_edge")
         tool_prefixes.append("sandbox_run")
+        tool_prefixes.append("uia_snapshot")
+        tool_prefixes.append("som_detect")
         tool_prefixes.append("fishbowl")
         tool_prefixes.append("step_approval")
         tool_prefixes.append("belief")
@@ -491,6 +507,9 @@ class AgentApp:
         self.current_run = None
         self.pending_runs = {}
 
+        self.workflow = WorkflowRecorder(self.settings.data_dir)
+        self.browser_use = BrowserUseAdapter()
+        self.workflow_use = WorkflowUseAdapter()
 
         self.vla_driver = LiveDriver(self, self.settings.data_dir)
         if self._vla_enabled:
@@ -785,20 +804,25 @@ class AgentApp:
         if extra:
             data.update(extra)
         run_id = ""
+        trace_id = ""
         if getattr(self, "current_run", None):
             run_id = self.current_run.run_id
+            trace_id = getattr(self.current_run, "trace_id", "")
         event = TaskEvent(
             event_type=event_type,
             run_id=run_id,
             step_id=(extra or {}).get("step_id") if extra else None,
             payload=data,
             timestamp=time.time(),
+            trace_id=(extra or {}).get("trace_id") or trace_id,
         )
         log_audit(self.memory, "task_event", event.__dict__, redact=getattr(self, "redact_logs", False))
         try:
-            trace_id = (extra or {}).get("trace_id") or ""
-            if self.langfuse and trace_id:
+            trace_id = (extra or {}).get("trace_id") or trace_id
+            if trace_id:
                 self.langfuse.log_event(trace_id, event_type, data)
+                self.agentops.log_event(trace_id, event_type, data)
+                self.otel.log_event(trace_id, event_type, data)
         except Exception:
             pass
 
@@ -1444,6 +1468,7 @@ class AgentApp:
             status=OrchestratorState.PLANNED.value,
             created_at=datetime.utcnow().isoformat() + "Z",
             command=cmd,
+            trace_id=str(uuid.uuid4()),
         )
         self.pending_runs[run_id] = run
         self.memory.create_task_run(
@@ -1483,6 +1508,7 @@ class AgentApp:
             status=payload.get("status") or OrchestratorState.PLANNED.value,
             created_at=payload.get("created_at") or "",
             command=payload.get("command") or "",
+            trace_id=payload.get("trace_id") or "",
         )
 
     def _load_last_run(self) -> None:
@@ -1577,7 +1603,7 @@ class AgentApp:
         self.current_run = run
         self.stop_event.clear()
         self._set_run_status(run, OrchestratorState.RUNNING.value)
-        hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time())
+        hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time(), trace_id=run.trace_id)
         log_audit(self.memory, "run_heartbeat", hb.__dict__, redact=getattr(self, "redact_logs", False))
         self._start_proof_pack(run)
         for step in run.plan_steps:
@@ -1617,7 +1643,7 @@ class AgentApp:
                     break
         if run.status == OrchestratorState.RUNNING.value:
             self._set_run_status(run, OrchestratorState.COMPLETE.value)
-        hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time())
+        hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time(), trace_id=run.trace_id)
         log_audit(self.memory, "run_heartbeat", hb.__dict__, redact=getattr(self, "redact_logs", False))
         self._write_summary(run)
         if run.status == OrchestratorState.COMPLETE.value:
@@ -2053,18 +2079,25 @@ class AgentApp:
             step_id=step_id,
             timestamp=time.time(),
             dry_run=dry_run,
+            trace_id=getattr(self.current_run, "trace_id", "") if getattr(self, "current_run", None) else "",
         )
+        try:
+            self.workflow.record_tool(name, args, "call")
+        except Exception:
+            pass
         log_audit(self.memory, "tool_call", tool_call.__dict__, redact=getattr(self, "redact_logs", False))
         if getattr(self, "replay_mode", False):
             dry_run = True
-        return execute_tool(
-            self.tools,
-            name,
-            args,
-            self.settings.autonomy_level,
-            confirm=confirm,
-            dry_run=dry_run,
-        )
+        trace_id = tool_call.trace_id
+        with self.otel.span("tool_call", trace_id=trace_id, attributes={"tool": name, "risk": tool_call.risk}):
+            return execute_tool(
+                self.tools,
+                name,
+                args,
+                self.settings.autonomy_level,
+                confirm=confirm,
+                dry_run=dry_run,
+            )
 
 
 
@@ -2104,6 +2137,10 @@ class AgentApp:
     def _execute_step(self, step: str):
 
         lowered = step.strip().lower()
+        try:
+            self.workflow.record_step(step, "run")
+        except Exception:
+            pass
 
         if os.getenv("AGENTIC_DEBATE", "false").lower() in ("1", "true", "yes", "on"):
             risky = any(k in lowered for k in ("delete", "drop", "format", "rm ", "wipe", "destroy"))
@@ -2128,6 +2165,47 @@ class AgentApp:
                 raise RuntimeError("simulate requires: simulate <tool> <args>")
             name, args = payload.split(" ", 1)
             out = self._execute_tool(name.strip(), args.strip(), dry_run=True)
+            self.log_line(out)
+            return
+
+        if lowered.startswith("uia_snapshot"):
+            parts = step.split(" ", 1)
+            target = parts[1].strip() if len(parts) > 1 else ""
+            if not target:
+                target = os.path.join(self.settings.data_dir, "uia_snapshot.json")
+            saved = write_snapshot(target)
+            self.log_line(f"UIA snapshot saved: {saved}")
+            return
+
+        if lowered.startswith("som_detect "):
+            parts = step.split(" ", 2)
+            if len(parts) < 2:
+                raise RuntimeError("som_detect requires: som_detect <image_path> [out_path]")
+            image_path = parts[1].strip()
+            out_path = parts[2].strip() if len(parts) > 2 else image_path + ".som.json"
+            endpoint = os.getenv("AGENTIC_SOM_ENDPOINT", "").strip()
+            if not endpoint:
+                raise RuntimeError("AGENTIC_SOM_ENDPOINT not set")
+            saved = som_save(endpoint, image_path, out_path)
+            self.log_line(f"SOM saved: {saved}")
+            return
+
+        if lowered.startswith("browser_use "):
+            task = step[len("browser_use "):].strip()
+            if not task:
+                raise RuntimeError("browser_use requires a task")
+            out = self.browser_use.run(task)
+            self.log_line(out)
+            return
+
+        if lowered.startswith("workflow_use "):
+            rest = step[len("workflow_use "):].strip()
+            if not rest:
+                raise RuntimeError("workflow_use requires: workflow_use <workflow_path> [goal]")
+            parts = rest.split(" ", 1)
+            wf = parts[0].strip()
+            goal = parts[1].strip() if len(parts) > 1 else ""
+            out = self.workflow_use.run(wf, goal=goal)
             self.log_line(out)
             return
 
@@ -2876,6 +2954,39 @@ class AgentApp:
             self.browser = self.playwright.chromium.launch(headless=False)
 
         self.page = self.browser.new_page()
+        self._attach_network_logger()
+
+    def _attach_network_logger(self) -> None:
+        if not self.page:
+            return
+        enabled = os.getenv("AGENTIC_NET_LOG", "false").lower() in ("1", "true", "yes", "on")
+        if not enabled:
+            return
+        log_path = os.path.join(self.settings.data_dir, "net_log.jsonl")
+
+        def _handler(response):
+            try:
+                headers = response.headers or {}
+                ctype = headers.get("content-type", "")
+                if "application/json" not in ctype:
+                    return
+                data = response.json()
+                payload = {
+                    "ts": time.time(),
+                    "url": response.url,
+                    "status": response.status,
+                    "method": response.request.method,
+                    "data": data,
+                }
+                with open(log_path, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(payload) + "\n")
+            except Exception:
+                return
+
+        try:
+            self.page.on("response", _handler)
+        except Exception:
+            return
 
 
 
@@ -3024,6 +3135,39 @@ class AgentApp:
 
             if lowered == "compliance":
                 self.log_line(compliance_checklist())
+                return
+
+            if lowered.startswith("workflow_record"):
+                parts = cmd.split(" ", 2)
+                action = parts[1].strip().lower() if len(parts) > 1 else ""
+                if action == "start" and len(parts) > 2:
+                    name = parts[2].strip()
+                    self.workflow.start(name)
+                    self.log_line(f"Workflow recording started: {name}")
+                elif action == "stop":
+                    name = self.workflow.stop()
+                    self.log_line(f"Workflow saved: {name}" if name else "No active workflow.")
+                elif action == "list":
+                    items = self.workflow.list()
+                    self.log_line("Workflows: " + (", ".join(items) if items else "none"))
+                else:
+                    self.log_line("Usage: workflow_record start <name> | stop | list")
+                return
+
+            if lowered.startswith("workflow_run "):
+                name = cmd.split(" ", 1)[1].strip()
+                data = self.workflow.load(name)
+                if not data:
+                    self.log_line(f"Workflow not found: {name}")
+                    return
+                for item in data.get("steps", []):
+                    if item.get("type") == "step":
+                        try:
+                            self._execute_step(item.get("command", ""))
+                        except Exception as exc:
+                            self.log_line(f"Workflow step failed: {exc}")
+                            break
+                self.log_line(f"Workflow run complete: {name}")
                 return
 
             if lowered.startswith("vla"):
