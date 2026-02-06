@@ -42,6 +42,45 @@ Save, then restart SSH:
 Restart-Service sshd
 ```
 
+## Troubleshooting Log (What we tried + current errors)
+- Tailscale installed and logged in on both machines.
+- Tailscale IPs:
+  - CODYDESKTOP: `100.111.161.110`
+  - This machine: `100.98.190.75`
+- SSH attempt from this machine:
+  - Host key accepted.
+  - Password prompt appears, typing is invisible (normal SSH behavior).
+  - Error observed: `Permission denied, please try again.` then `Connection reset by 100.111.161.110 port 22`.
+- Likely causes:
+  - Wrong Windows password for `CODYDESKTOP\codym`, or
+  - `PasswordAuthentication` disabled in `sshd_config`.
+
+## What to check on CODYDESKTOP
+1. Confirm the correct Windows password for user `codym`.
+2. Ensure `sshd_config` allows password auth:
+   ```
+   PasswordAuthentication yes
+   PubkeyAuthentication yes
+   ```
+3. Restart SSH service:
+   ```powershell
+   Restart-Service sshd
+   ```
+
+## If password auth continues failing (key-based login)
+1. On this machine:
+   ```powershell
+   ssh-keygen -t ed25519 -f $env:USERPROFILE\.ssh\codydesktop -N ""
+   ```
+2. Copy the public key to the desktop (one-time):
+   ```powershell
+   type $env:USERPROFILE\.ssh\codydesktop.pub | ssh codym@100.111.161.110 "powershell -Command \"New-Item -ItemType Directory -Path $env:USERPROFILE\.ssh -Force; Add-Content -Path $env:USERPROFILE\.ssh\authorized_keys -Value (Get-Content -Raw)\""
+   ```
+3. Then connect with:
+   ```powershell
+   ssh -i $env:USERPROFILE\.ssh\codydesktop codym@100.111.161.110
+   ```
+
 ## Step 3: Add SSH aliases (this machine)
 Your SSH config:
 ```
