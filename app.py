@@ -126,6 +126,14 @@ from coding_trends import (
 from bdi_tools import agentic_pillars_summary, vertical_agent_templates
 from r2e_tools import write_r2e_index
 from orchestrator.state import OrchestratorState, validate_transition
+from core.schemas import (
+    PlanSchema,
+    PlanStepSchema,
+    ExecutionReport,
+    StepReport,
+    ToolResult,
+    Budget,
+)
 
 
 # Lazy imports for optional dependencies
@@ -2184,6 +2192,140 @@ class AgentApp:
 
 
 
+    def _step_to_schema(self, step_id: int, step_text: str) -> PlanStepSchema:
+        lowered = step_text.strip().lower()
+        for name in self.tools.tools.keys():
+            prefix = f"{name} "
+            if lowered.startswith(prefix):
+                args_str = step_text[len(prefix):].strip()
+                spec = self.tools.specs.get(name)
+                risk = spec.risk if spec else "safe"
+                confirm = bool(getattr(spec, "confirm_required", False))
+                return PlanStepSchema(
+                    step_id=step_id,
+                    title=f"{name} {args_str}"[:120],
+                    intent="Tool call",
+                    tool=name,
+                    args={"raw": args_str},
+                    risk=risk,
+                    requires_confirmation=confirm,
+                    timeout_s=90,
+                    max_attempts=2,
+                )
+        return PlanStepSchema(
+            step_id=step_id,
+            title=step_text[:120],
+            intent="Agent step",
+            tool="agent",
+            args={"text": step_text},
+            risk="safe",
+            requires_confirmation=False,
+        )
+
+    def _execute_step_schema(self, step: PlanStepSchema) -> ToolResult:
+        t0 = time.time()
+        ok = False
+        out = ""
+        err = ""
+        try:
+            if step.tool == "agent":
+                out = self._agent_chat(step.args.get("text", "")) or ""
+                ok = True
+            else:
+                raw = step.args.get("raw", "")
+                out = self._execute_tool(step.tool, raw) or ""
+                ok = True
+        except Exception as exc:
+            err = str(exc)
+            ok = False
+        t1 = time.time()
+        return ToolResult(
+            name=step.tool,
+            args=step.args,
+            risk=step.risk,
+            ok=ok,
+            started_at=t0,
+            ended_at=t1,
+            output_preview=(out[:2000] if out else ""),
+            error=(err[:2000] if err else ""),
+            files_changed=[],
+        )
+
+    def _run_plan_schema(self, plan: PlanSchema) -> ExecutionReport:
+        report = ExecutionReport(
+            run_id=plan.run_id,
+            trace_id=plan.trace_id,
+            goal=plan.goal,
+            status="running",
+            started_at=time.time(),
+            ended_at=0.0,
+        )
+        self._log_event("run_started", {"goal": plan.goal})
+        tool_calls = 0
+        started = time.time()
+        for step in plan.steps:
+            if len(report.steps) >= plan.budget.max_steps:
+                report.status = "failed"
+                report.failure_reason = "Budget exceeded: max_steps"
+                break
+            if (time.time() - started) > plan.budget.max_seconds:
+                report.status = "failed"
+                report.failure_reason = "Budget exceeded: max_seconds"
+                break
+            self._log_event(
+                "step_started",
+                {"title": step.title, "tool": step.tool, "risk": step.risk},
+                extra={"step_id": step.step_id},
+            )
+            step_rep = StepReport(step_id=step.step_id, title=step.title, status="running")
+            report.steps.append(step_rep)
+            if step.tool != "agent":
+                tool_calls += 1
+                if tool_calls > plan.budget.max_tool_calls:
+                    step_rep.status = "failed"
+                    report.status = "failed"
+                    report.failure_reason = "Budget exceeded: max_tool_calls"
+                    break
+            if step.requires_confirmation and self.step_approval_enabled:
+                self._log_event(
+                    "tool_call_blocked",
+                    {"tool": step.tool, "args": step.args},
+                    extra={"step_id": step.step_id},
+                )
+                self.memory.set("pending_action", json.dumps({"type": "tool", "name": step.tool, "args": step.args.get("raw", "")}))
+                report.status = "needs_input"
+                step_rep.status = "skipped"
+                break
+            ok = False
+            for attempt in range(1, step.max_attempts + 1):
+                step_rep.attempts = attempt
+                self._log_event(
+                    "tool_call_started",
+                    {"tool": step.tool, "args": step.args, "attempt": attempt},
+                    extra={"step_id": step.step_id},
+                )
+                tr = self._execute_step_schema(step)
+                step_rep.tool_results.append(tr)
+                self._log_event(
+                    "tool_call_finished",
+                    {"tool": tr.name, "ok": tr.ok, "output_preview": tr.output_preview, "error": tr.error},
+                    extra={"step_id": step.step_id},
+                )
+                if tr.ok:
+                    ok = True
+                    break
+            step_rep.status = "succeeded" if ok else "failed"
+            self._log_event("step_finished", {"status": step_rep.status}, extra={"step_id": step.step_id})
+            if step_rep.status == "failed":
+                report.status = "failed"
+                report.failure_reason = f"Step {step.step_id} failed: {step.title}"
+                break
+        if report.status == "running":
+            report.status = "succeeded"
+        report.ended_at = time.time()
+        self._log_event("run_finished", {"status": report.status, "failure_reason": report.failure_reason})
+        return report
+
     def _execute_tool(self, name: str, args: str, confirm: bool = False, dry_run: bool = False):
 
         if not hasattr(self, "_tool_calls_this_task"):
@@ -3032,36 +3174,64 @@ class AgentApp:
 
             return "Nothing to confirm."
 
-
-
         plan = self.planner.plan(instruction)
-
         if plan:
             max_steps = getattr(self.settings, "max_plan_steps", 0)
             if max_steps and len(plan) > max_steps:
                 self._log_event(
                     "plan_guard",
-                    json.dumps({
+                    {
                         "limit": max_steps,
                         "original_steps": len(plan),
-                    }),
+                    },
                 )
                 plan = plan[:max_steps]
                 self.log_line(f"Plan truncated to {max_steps} steps due to budget.")
 
-            self._log_event("plan", json.dumps({"steps": plan}))
+            run_id = getattr(self.current_run, "run_id", datetime.utcnow().strftime("%Y-%m-%d_%H%M%S"))
+            trace_id = getattr(self.current_run, "trace_id", str(uuid.uuid4()))
+            steps = [self._step_to_schema(i + 1, s) for i, s in enumerate(plan)]
+            plan_schema = PlanSchema(
+                run_id=run_id,
+                trace_id=trace_id,
+                goal=instruction,
+                success_criteria=["No errors and user intent satisfied"],
+                steps=steps,
+                constraints={"demo_mode": self.demo_mode},
+                budget=Budget(
+                    max_steps=getattr(self.settings, "max_plan_steps", 20) or 20,
+                    max_tool_calls=int(getattr(self.settings, "max_tool_calls_per_task", 50) or 50),
+                    max_seconds=900,
+                ),
+                created_at=time.time(),
+                model=getattr(self.settings, "openai_model", ""),
+            )
+            if getattr(self, "current_run", None):
+                self.current_run.plan_schema = plan_schema
 
-            self.executor.run(plan)
+            self._log_event(
+                "plan_created",
+                {
+                    "goal": plan_schema.goal,
+                    "steps": [
+                        {
+                            "step_id": st.step_id,
+                            "title": st.title,
+                            "tool": st.tool,
+                            "risk": st.risk,
+                            "confirm": st.requires_confirmation,
+                        }
+                        for st in plan_schema.steps
+                    ],
+                    "budget": plan_schema.budget.__dict__,
+                },
+            )
 
-            verify_msg = self.verifier.verify(plan)
+            report = self._run_plan_schema(plan_schema)
+            if getattr(self, "current_run", None):
+                self.current_run.report = report
 
-            if verify_msg:
-
-                self._log_event("verify", verify_msg)
-
-            return "Done."
-
-
+            return "Done." if report.status == "succeeded" else f"Run ended: {report.status}"
 
         return self._agent_chat(instruction) or "Agent task completed"
 
