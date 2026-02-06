@@ -2935,7 +2935,13 @@ class AgentApp:
                 return
             try:
                 self._terminal_queue.put("[sandbox] running...\n")
-                result = run_python(code)
+                output_buf = io.StringIO()
+                with contextlib.redirect_stdout(output_buf), contextlib.redirect_stderr(output_buf):
+                    result = run_python(code)
+                out_text = output_buf.getvalue()
+                if out_text:
+                    for line in out_text.splitlines():
+                        self._terminal_queue.put(line + "\n")
                 self._terminal_queue.put("[sandbox] done\n")
                 self.log_line(json.dumps(result))
             except Exception as exc:
@@ -4095,7 +4101,7 @@ def _make_web_handler(app):
 
         def do_POST(self):
 
-            if self.path not in ("/api/command", "/api/approve", "/api/approve_step"):
+            if self.path not in ("/api/command", "/api/approve", "/api/approve_step", "/api/config"):
 
                 self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
 
@@ -4110,6 +4116,23 @@ def _make_web_handler(app):
                 payload = json.loads(raw) if raw else {}
 
                 command = (payload.get("command") or "").strip()
+
+                if self.path == "/api/config":
+                    updates = payload.get("updates") or {}
+                    if not isinstance(updates, dict):
+                        self._send(HTTPStatus.BAD_REQUEST, b"updates must be object", "text/plain")
+                        return
+                    applied = {}
+                    for key, value in updates.items():
+                        if not isinstance(key, str):
+                            continue
+                        if not hasattr(app.settings, key):
+                            continue
+                        setattr(app.settings, key, value)
+                        applied[key] = value
+                    body = json.dumps({"status": "applied", "applied": applied}).encode("utf-8")
+                    self._send(HTTPStatus.OK, body, "application/json")
+                    return
 
                 if self.path == "/api/approve":
                     run_id = (payload.get("run_id") or "").strip()

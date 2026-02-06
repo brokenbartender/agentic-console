@@ -351,6 +351,34 @@
         color: var(--muted);
       }
 
+      .source-card {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fff;
+        margin-bottom: 8px;
+      }
+
+      .source-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: #f4efe9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        color: var(--accent-3);
+      }
+
+      .source-meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
       .mono {
         font-family: "IBM Plex Mono", monospace;
       }
@@ -562,7 +590,16 @@
           return;
         }
         el.innerHTML = items.map((s) => {
-          return `<div class="event"><strong>${s.source}</strong> chunks=${s.chunks} rank=${(s.avg_rank || 0).toFixed(2)}</div>`;
+          const name = (s.source || "").split(/[\\/]/).slice(-1)[0] || s.source;
+          return `
+            <div class="source-card">
+              <div class="source-icon">${name.slice(0,1).toUpperCase()}</div>
+              <div>
+                <strong>${name}</strong>
+                <div class="source-meta">${s.source}</div>
+                <div class="source-meta">chunks=${s.chunks} rank=${(s.avg_rank || 0).toFixed(2)}</div>
+              </div>
+            </div>`;
         }).join("");
       }
 
@@ -587,10 +624,16 @@
         const edges = graph.edges || [];
         const width = svg.clientWidth || 800;
         const height = svg.clientHeight || 420;
-        const centerX = width / 2;
-        const centerY = height / 2;
+        if (!svg.__view) {
+          svg.__view = { x: 0, y: 0, k: 1, dragging: false, startX: 0, startY: 0 };
+        }
+        svg.setAttribute("viewBox", `${-width/2} ${-height/2} ${width} ${height}`);
+        const centerX = 0;
+        const centerY = 0;
         const radius = Math.min(width, height) / 3;
         const positions = {};
+        const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        svg.appendChild(g);
         nodes.forEach((n, i) => {
           const angle = (i / Math.max(1, nodes.length)) * Math.PI * 2;
           positions[n.id] = {
@@ -609,7 +652,7 @@
           line.setAttribute("y2", t.y);
           line.setAttribute("stroke", "#1b7f6b");
           line.setAttribute("stroke-width", Math.max(1, e.count / 2));
-          svg.appendChild(line);
+          g.appendChild(line);
         });
         nodes.forEach((n) => {
           const pos = positions[n.id];
@@ -618,7 +661,7 @@
           circle.setAttribute("cy", pos.y);
           circle.setAttribute("r", 18);
           circle.setAttribute("fill", n.type === "local" ? "#ff8a3d" : "#3c5ccf");
-          svg.appendChild(circle);
+          g.appendChild(circle);
           const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
           label.setAttribute("x", pos.x);
           label.setAttribute("y", pos.y + 4);
@@ -626,9 +669,48 @@
           label.setAttribute("fill", "#fff");
           label.setAttribute("font-size", "12");
           label.textContent = n.label;
-          svg.appendChild(label);
+          g.appendChild(label);
         });
+        applyTransform();
       }
+
+      function applyTransform() {
+        const svg = document.getElementById("brain-svg");
+        const g = svg.querySelector("g");
+        if (!g || !svg.__view) return;
+        const v = svg.__view;
+        g.setAttribute("transform", `translate(${v.x}, ${v.y}) scale(${v.k})`);
+      }
+
+      (function setupBrainInteractions() {
+        const svg = document.getElementById("brain-svg");
+        svg.addEventListener("wheel", (e) => {
+          e.preventDefault();
+          if (!svg.__view) return;
+          const delta = e.deltaY < 0 ? 1.1 : 0.9;
+          svg.__view.k = Math.min(3, Math.max(0.3, svg.__view.k * delta));
+          applyTransform();
+        });
+        svg.addEventListener("mousedown", (e) => {
+          if (!svg.__view) return;
+          svg.__view.dragging = true;
+          svg.__view.startX = e.clientX;
+          svg.__view.startY = e.clientY;
+        });
+        window.addEventListener("mousemove", (e) => {
+          if (!svg.__view || !svg.__view.dragging) return;
+          const dx = (e.clientX - svg.__view.startX);
+          const dy = (e.clientY - svg.__view.startY);
+          svg.__view.startX = e.clientX;
+          svg.__view.startY = e.clientY;
+          svg.__view.x += dx;
+          svg.__view.y += dy;
+          applyTransform();
+        });
+        window.addEventListener("mouseup", () => {
+          if (svg.__view) svg.__view.dragging = false;
+        });
+      })();
 
       function extractArtifacts(events) {
         for (const e of events) {

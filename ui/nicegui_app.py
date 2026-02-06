@@ -20,14 +20,17 @@ def send_command(cmd: str) -> str:
 
 
 ui.label("Agentic Control Plane")
+status = ui.label("idle").classes("text-sm text-gray-500")
 cmd = ui.input(placeholder="Enter command (e.g. agent do X)").classes("w-full")
 out = ui.textarea().classes("w-full").props("readonly")
 
 
 def run_cmd() -> None:
     text = cmd.value or ""
+    status.text = "running..."
     out.value = send_command(text)
+    status.text = "idle"
 
 
 ui.button("Run", on_click=run_cmd)
-ui.run(title="Agentic Control Plane", native=True, reload=False, dark=False)
+ui.run(title="Agentic Control Plane", native=True, reload=False, dark=False, window_size=(520, 420), window_always_on_top=True)
