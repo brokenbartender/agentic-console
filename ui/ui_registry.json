@@ -1,0 +1,27 @@
+{
+  "open_webui": {
+    "status": "planned",
+    "url": "http://127.0.0.1:3000",
+    "notes": "Artifacts panel target UI"
+  },
+  "flowise": {
+    "status": "planned",
+    "url": "http://127.0.0.1:3001",
+    "notes": "Graph canvas"
+  },
+  "rivet": {
+    "status": "planned",
+    "url": "http://127.0.0.1:3002",
+    "notes": "Live node tracing"
+  },
+  "agentops": {
+    "status": "enabled",
+    "url": "https://app.agentops.ai",
+    "notes": "Session replay / cost"
+  },
+  "nicegui": {
+    "status": "planned",
+    "url": "http://127.0.0.1:8081",
+    "notes": "Desktop companion"
+  }
+}

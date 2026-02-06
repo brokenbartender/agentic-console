@@ -57,6 +57,12 @@ python -m pip install pyttsx3
 - `workflow_run <name>`: replay a recorded workflow
 - `browser_use <task>`: run browser-use agent (if installed)
 - `workflow_use <path> [goal]`: run workflow-use (if installed)
+
+## UI Launchers
+- `scripts/launch_open_webui.ps1`: Open WebUI (Artifacts-style UI)
+- `scripts/launch_flowise.ps1`: Flowise graph canvas
+- `scripts/launch_rivet.ps1`: Rivet live execution tracing
+- `scripts/launch_nicegui.ps1`: NiceGUI desktop companion
 - `slow_mode on|off`: enable deliberate System 2 pass
 - `dot_mode on|off`: enable diversity-of-thoughts drafting
 - `graph_query <entity>`: query GraphRAG neighbors for an entity
