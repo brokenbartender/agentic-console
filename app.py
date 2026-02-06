@@ -2318,19 +2318,24 @@ class AgentApp:
         value = self.memory.get("computer_desktop_approval") or os.getenv("AGENTIC_DESKTOP_APPROVAL", "true")
         return str(value).lower() in ("1", "true", "yes", "on")
 
-    def _run_plan_schema(self, plan: PlanSchema) -> ExecutionReport:
-        report = ExecutionReport(
-            run_id=plan.run_id,
-            trace_id=plan.trace_id,
-            goal=plan.goal,
-            status="running",
-            started_at=time.time(),
-            ended_at=0.0,
-        )
+    def _run_plan_schema(self, plan: PlanSchema, report: ExecutionReport | None = None, start_step_id: int | None = None) -> ExecutionReport:
+        if report is None:
+            report = ExecutionReport(
+                run_id=plan.run_id,
+                trace_id=plan.trace_id,
+                goal=plan.goal,
+                status="running",
+                started_at=time.time(),
+                ended_at=0.0,
+            )
+        else:
+            report.status = "running"
         self._log_event("run_started", {"goal": plan.goal})
         tool_calls = 0
         started = time.time()
         for step in plan.steps:
+            if start_step_id and step.step_id < start_step_id:
+                continue
             self._current_step_id = step.step_id
             self._write_run_state(plan, report, current_step=step.step_id)
             if len(report.steps) >= plan.budget.max_steps:
@@ -2394,6 +2399,8 @@ class AgentApp:
                         extra={"step_id": step.step_id},
                     )
                     self.memory.set("pending_action", json.dumps({"type": "tool", "name": step.tool, "args": pending_args}))
+                    self.memory.set("pending_step_id", str(step.step_id))
+                    self.memory.set("pending_plan_run_id", plan.run_id)
                     self._current_step_id = None
                     report.status = "needs_input"
                     step_rep.status = "skipped"
@@ -3336,6 +3343,18 @@ class AgentApp:
                     self.memory.set(f"deny_tool:{name}", "true")
                     return f"Denied tool {name}."
                 out = self._execute_tool(name, args, confirm=True)
+                try:
+                    pending_step = self.memory.get("pending_step_id")
+                    pending_run = self.memory.get("pending_plan_run_id")
+                    if pending_step and pending_run and getattr(self, "current_run", None):
+                        if self.current_run.run_id == pending_run and getattr(self.current_run, "plan_schema", None):
+                            start_step = int(pending_step) + 1
+                            self.memory.set("pending_step_id", "")
+                            self.memory.set("pending_plan_run_id", "")
+                            report = self._run_plan_schema(self.current_run.plan_schema, report=self.current_run.report, start_step_id=start_step)
+                            self.current_run.report = report
+                except Exception:
+                    pass
 
                 return out
 

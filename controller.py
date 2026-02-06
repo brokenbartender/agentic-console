@@ -466,6 +466,40 @@ class HeadlessController:
         except Exception:
             return None
 
+    def get_last_screenshot(self) -> str:
+        run = self.current_run
+        if not run:
+            return ""
+        base = os.path.join(self.settings.data_dir, "runs", run.run_id)
+        if not os.path.isdir(base):
+            return ""
+        files = []
+        try:
+            for name in os.listdir(base):
+                if name.startswith("screen-") and name.endswith(".png"):
+                    path = os.path.join(base, name)
+                    try:
+                        files.append((os.path.getmtime(path), path))
+                    except Exception:
+                        continue
+        except Exception:
+            return ""
+        if not files:
+            return ""
+        files.sort(key=lambda x: x[0], reverse=True)
+        return files[0][1]
+
+    def capture_screen(self) -> str:
+        run = self.current_run
+        if not run:
+            return ""
+        out_dir = os.path.join(self.settings.data_dir, "runs", run.run_id)
+        try:
+            obs = self.app.tools.computer.observe(out_dir)
+            return obs.screenshot_path
+        except Exception:
+            return ""
+
     def handle_command(self, text: str) -> str:
         try:
             out = self.app._orchestrate(text)

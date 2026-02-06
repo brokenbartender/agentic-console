@@ -1,6 +1,7 @@
 from nicegui import ui
 from controller import HeadlessController
 import json
+import os
 
 ctrl = HeadlessController()
 
@@ -185,6 +186,20 @@ def main_dashboard():
             with exec_container:
                 ui.label("Pending Approval").classes("text-xs font-bold text-orange-400")
                 ui.label(json.dumps(pending, indent=2)).classes("text-[10px] text-gray-400")
+                with ui.row().classes("gap-2"):
+                    ui.button("Approve Once", on_click=lambda: handle_command("approve_once")).props("flat color=primary")
+                    ui.button("Always Allow", on_click=lambda: handle_command("approve_always")).props("flat color=primary")
+                    ui.button("Never Allow", on_click=lambda: handle_command("approve_never")).props("flat color=red")
+        shot = ctrl.get_last_screenshot()
+        if shot:
+            with exec_container:
+                ui.label("Desktop View").classes("text-xs font-bold text-gray-400")
+                ui.image(f"{shot}?t={int(os.path.getmtime(shot))}").classes("w-full rounded border border-gray-800")
+                ui.button("Capture Screen", on_click=lambda: capture_screen()).props("flat color=primary")
+        else:
+            with exec_container:
+                ui.label("Desktop View").classes("text-xs font-bold text-gray-400")
+                ui.button("Capture Screen", on_click=lambda: capture_screen()).props("flat color=primary")
         if run.status == "planned":
             approval_row.classes(remove="hidden")
             approve_btn.on_click(lambda: (ctrl.approve_run(run.run_id), render_plan()))
@@ -245,6 +260,7 @@ def main_dashboard():
         render_logs()
         render_plan()
         render_runs()
+        render_thinking()
 
     async def run_task(text):
         if not text:
@@ -255,6 +271,10 @@ def main_dashboard():
         render_logs()
         render_plan()
         render_runs()
+
+    def capture_screen():
+        ctrl.capture_screen()
+        render_plan()
 
     ui.timer(1.0, render_logs)
     ui.timer(1.0, render_plan)
