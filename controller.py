@@ -236,6 +236,10 @@ class HeadlessController:
         )
         tool_calls = 0
         for step in plan.steps:
+            if step.tool == "computer":
+                backend = self.get_computer_backend()
+                if backend == "desktop" and self.get_desktop_approval():
+                    step.requires_confirmation = True
             step_report = StepReport(step_id=step.step_id, title=step.title, status="running")
             report.steps.append(step_report)
             for attempt in range(1, step.max_attempts + 1):
@@ -252,23 +256,50 @@ class HeadlessController:
                         command = step.tool + " " + (step.args.get("raw") or "")
                     else:
                         command = step.intent
+                if step.requires_confirmation and self.app.step_approval_enabled:
+                    pending_args = step.args.get("raw") or ""
+                    if step.tool == "computer":
+                        payload = dict(step.args or {})
+                        if "mode" not in payload:
+                            payload["mode"] = "act"
+                        params = payload.get("params") or {}
+                        if "backend" not in params:
+                            params["backend"] = self.get_computer_backend()
+                        payload["params"] = params
+                        pending_args = json.dumps(payload)
+                    self.memory.set(
+                        "pending_action",
+                        json.dumps({"type": "tool", "name": step.tool, "args": pending_args}),
+                    )
+                    report.status = "needs_input"
+                    step_report.status = "skipped"
+                    report.failure_reason = f"Approval required for {step.tool}"
+                    break
                 t0 = time.time()
                 ok = False
                 err = ""
                 out_preview = ""
                 try:
-                    # Observe before UI actions if using computer tool.
                     if step.tool == "computer":
+                        out_dir = os.path.join(self.settings.data_dir, "runs", run.run_id)
                         try:
-                            self.app._execute_tool("computer", json.dumps({"mode": "observe", "out_dir": os.path.join(self.settings.data_dir, "runs", run.run_id)}))
+                            self.app.tools.computer.observe(out_dir)
                         except Exception:
                             pass
-                    self.app._execute_step(command)
-                    if step.tool == "computer":
+                        payload = dict(step.args or {})
+                        if "mode" not in payload:
+                            payload["mode"] = "act"
+                        params = payload.get("params") or {}
+                        if "backend" not in params:
+                            params["backend"] = self.get_computer_backend()
+                        payload["params"] = params
+                        self.app._execute_tool("computer", json.dumps(payload))
                         try:
-                            self.app._execute_tool("computer", json.dumps({"mode": "observe", "out_dir": os.path.join(self.settings.data_dir, "runs", run.run_id)}))
+                            self.app.tools.computer.observe(out_dir)
                         except Exception:
                             pass
+                    else:
+                        self.app._execute_step(command)
                     ok = True
                     out_preview = f"{command}"
                 except Exception as exc:
@@ -410,6 +441,40 @@ class HeadlessController:
                 self.app.step_approval_var.set(self.app.step_approval_enabled)
         except Exception:
             pass
+
+    def set_computer_backend(self, backend: str) -> None:
+        value = (backend or "browser").strip().lower()
+        self.memory.set("computer_backend", value)
+
+    def get_computer_backend(self) -> str:
+        value = self.memory.get("computer_backend") or os.getenv("AGENTIC_COMPUTER_BACKEND", "browser")
+        return (value or "browser").strip().lower()
+
+    def set_desktop_approval(self, enabled: bool) -> None:
+        self.memory.set("computer_desktop_approval", "true" if enabled else "false")
+
+    def get_desktop_approval(self) -> bool:
+        value = self.memory.get("computer_desktop_approval") or os.getenv("AGENTIC_DESKTOP_APPROVAL", "true")
+        return str(value).lower() in ("1", "true", "yes", "on")
+
+    def pending_action(self) -> Dict[str, Any] | None:
+        pending = self.memory.get("pending_action")
+        if not pending:
+            return None
+        try:
+            return json.loads(pending)
+        except Exception:
+            return None
+
+    def handle_command(self, text: str) -> str:
+        try:
+            out = self.app._orchestrate(text)
+        except Exception as exc:
+            out = f"command error: {exc}"
+        if out:
+            self.log(out, type="info")
+        self._sync_from_app()
+        return out or ""
 
     def save_canvas(self, text: str) -> str:
         run = self.current_run

@@ -2266,6 +2266,25 @@ class AgentApp:
             if step.tool == "agent":
                 out = self._agent_chat(step.args.get("text", "")) or ""
                 ok = True
+            elif step.tool == "computer":
+                payload: dict = {}
+                raw = step.args.get("raw") if isinstance(step.args, dict) else ""
+                if raw:
+                    try:
+                        payload = json.loads(raw)
+                    except Exception:
+                        payload = {"mode": "act", "params": {"raw": raw}}
+                else:
+                    if isinstance(step.args, dict):
+                        payload = dict(step.args)
+                if "mode" not in payload:
+                    payload["mode"] = "act"
+                params = payload.get("params") or {}
+                if "backend" not in params:
+                    params["backend"] = self._get_computer_backend(step.args if isinstance(step.args, dict) else {})
+                payload["params"] = params
+                out = self._execute_tool("computer", json.dumps(payload)) or ""
+                ok = True
             else:
                 raw = step.args.get("raw", "")
                 out = self._execute_tool(step.tool, raw) or ""
@@ -2285,6 +2304,19 @@ class AgentApp:
             error=(err[:2000] if err else ""),
             files_changed=[],
         )
+
+    def _get_computer_backend(self, step_args: dict | None = None) -> str:
+        backend = ""
+        if isinstance(step_args, dict):
+            backend = step_args.get("backend") or (step_args.get("params") or {}).get("backend") or ""
+        if not backend:
+            backend = self.memory.get("computer_backend") or os.getenv("AGENTIC_COMPUTER_BACKEND", "browser")
+        backend = str(backend).strip().lower()
+        return backend or "browser"
+
+    def _desktop_requires_approval(self) -> bool:
+        value = self.memory.get("computer_desktop_approval") or os.getenv("AGENTIC_DESKTOP_APPROVAL", "true")
+        return str(value).lower() in ("1", "true", "yes", "on")
 
     def _run_plan_schema(self, plan: PlanSchema) -> ExecutionReport:
         report = ExecutionReport(
@@ -2326,6 +2358,10 @@ class AgentApp:
                     report.status = "failed"
                     report.failure_reason = "Budget exceeded: max_tool_calls"
                     break
+            if step.tool == "computer":
+                backend = self._get_computer_backend(step.args if isinstance(step.args, dict) else {})
+                if backend == "desktop" and self._desktop_requires_approval():
+                    step.requires_confirmation = True
             if step.requires_confirmation:
                 if self.memory.get(f"deny_tool:{step.tool}") == "true":
                     self._current_step_id = None
@@ -2334,12 +2370,30 @@ class AgentApp:
                     report.failure_reason = f"Tool {step.tool} blocked by policy"
                     break
                 if self.memory.get(f"allow_tool:{step.tool}") != "true" and self.step_approval_enabled:
+                    pending_args = step.args.get("raw", "") if isinstance(step.args, dict) else ""
+                    if step.tool == "computer":
+                        payload = {}
+                        if pending_args:
+                            try:
+                                payload = json.loads(pending_args)
+                            except Exception:
+                                payload = {"mode": "act", "params": {"raw": pending_args}}
+                        else:
+                            if isinstance(step.args, dict):
+                                payload = dict(step.args)
+                        if "mode" not in payload:
+                            payload["mode"] = "act"
+                        params = payload.get("params") or {}
+                        if "backend" not in params:
+                            params["backend"] = self._get_computer_backend(step.args if isinstance(step.args, dict) else {})
+                        payload["params"] = params
+                        pending_args = json.dumps(payload)
                     self._log_event(
                         "tool_call_blocked",
                         {"tool": step.tool, "args": step.args},
                         extra={"step_id": step.step_id},
                     )
-                    self.memory.set("pending_action", json.dumps({"type": "tool", "name": step.tool, "args": step.args.get("raw", "")}))
+                    self.memory.set("pending_action", json.dumps({"type": "tool", "name": step.tool, "args": pending_args}))
                     self._current_step_id = None
                     report.status = "needs_input"
                     step_rep.status = "skipped"

@@ -153,6 +153,8 @@ class ComputerController:
         if mode == "act":
             action = payload.get("action") or ""
             params = payload.get("params") or {}
+            if "backend" not in params and payload.get("backend"):
+                params["backend"] = payload.get("backend")
             result = self.act(action, params)
             return {"result": result}
         raise RuntimeError("computer requires mode observe|act")
