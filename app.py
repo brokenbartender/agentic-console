@@ -383,10 +383,11 @@ class AgentApp:
         tool_prefixes.append("vla")
 
         # Capabilities handshake (dynamic discovery)
-        try:
-            self._send_capabilities()
-        except Exception:
-            pass
+        if os.getenv("AGENTIC_A2A_HANDSHAKE", "false").lower() in ("1", "true", "yes", "on"):
+            try:
+                self._send_capabilities()
+            except Exception:
+                pass
         tool_prefixes.append("data_profile")
         tool_prefixes.append("ai_interface")
         tool_prefixes.append("rag_sources")
@@ -3963,6 +3964,55 @@ def _make_web_handler(app):
                 body = json.dumps(roles).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
+            if self.path == "/api/pending_runs":
+                pending = []
+                try:
+                    for run_id, run in app.pending_runs.items():
+                        pending.append({
+                            "run_id": run_id,
+                            "intent": getattr(run, "intent", ""),
+                            "plan_steps": getattr(run, "plan_steps", []),
+                        })
+                except Exception:
+                    pending = []
+                body = json.dumps(pending).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path == "/api/user_profile":
+                profile = {}
+                try:
+                    profile = app.memory.get_user_profile("default")
+                except Exception:
+                    profile = {}
+                body = json.dumps(profile).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if self.path.startswith("/assets/"):
+                try:
+                    rel_path = self.path.lstrip("/")
+                    ui_root = os.path.abspath(os.path.join(app.settings.data_dir, "..", "ui", "control_plane"))
+                    asset_path = os.path.abspath(os.path.join(ui_root, rel_path))
+                    if not asset_path.startswith(ui_root):
+                        self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
+                        return
+                    if not os.path.exists(asset_path):
+                        self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
+                        return
+                    ext = os.path.splitext(asset_path)[1].lower()
+                    content_type = {
+                        ".js": "text/javascript",
+                        ".css": "text/css",
+                        ".map": "application/json",
+                        ".svg": "image/svg+xml",
+                        ".png": "image/png",
+                        ".ico": "image/x-icon",
+                    }.get(ext, "application/octet-stream")
+                    with open(asset_path, "rb") as handle:
+                        data = handle.read()
+                    self._send(HTTPStatus.OK, data, content_type)
+                except Exception:
+                    self._send(HTTPStatus.INTERNAL_SERVER_ERROR, b"asset error", "text/plain")
+                return
             if self.path == "/api/cockpit":
                 payload = {
                     "metrics": app.metrics.snapshot(),
@@ -4102,7 +4152,7 @@ def _make_web_handler(app):
 
         def do_POST(self):
 
-            if self.path not in ("/api/command", "/api/approve", "/api/approve_step", "/api/config"):
+            if self.path not in ("/api/command", "/api/approve", "/api/approve_step", "/api/config", "/api/memory_search"):
 
                 self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
 
@@ -4132,6 +4182,18 @@ def _make_web_handler(app):
                         setattr(app.settings, key, value)
                         applied[key] = value
                     body = json.dumps({"status": "applied", "applied": applied}).encode("utf-8")
+                    self._send(HTTPStatus.OK, body, "application/json")
+                    return
+                if self.path == "/api/memory_search":
+                    query = (payload.get("query") or "").strip()
+                    if not query:
+                        self._send(HTTPStatus.BAD_REQUEST, b"missing query", "text/plain")
+                        return
+                    try:
+                        results = app.memory.search_memory(query, limit=8, scope="shared")
+                    except Exception:
+                        results = []
+                    body = json.dumps(results).encode("utf-8")
                     self._send(HTTPStatus.OK, body, "application/json")
                     return
 
@@ -4209,9 +4271,53 @@ def _start_web_server(app):
 
 
 
+def _auto_launch_local_dual_peers(settings) -> bool:
+    enabled = os.getenv("AGENTIC_LOCAL_DUAL_PEERS", "false").lower() in ("1", "true", "yes", "on")
+    if not enabled:
+        return False
+    node_name = os.getenv("AGENTIC_NODE_NAME", "") or getattr(settings, "node_name", "")
+    if node_name and node_name not in ("work",):
+        return False
+    hidden = os.getenv("AGENTIC_LOCAL_DUAL_PEERS_HIDDEN", "false").lower() in ("1", "true", "yes", "on")
+    script_name = "launch_local_dual_peers_hidden.ps1" if hidden else "launch_local_dual_peers.ps1"
+    script_path = os.path.join(os.getcwd(), "scripts", script_name)
+    if not os.path.exists(script_path):
+        return False
+    try:
+        subprocess.Popen(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                script_path,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if hidden else 0,
+        )
+        return True
+    except Exception:
+        return False
+
+
+
 def main():
 
     settings = get_settings()
+    if _auto_launch_local_dual_peers(settings):
+        return
+
+    if os.getenv("AGENTIC_UI", "nicegui").lower() == "nicegui":
+        try:
+            from dashboard import run_dashboard
+            run_dashboard()
+            return
+        except Exception:
+            pass
+
 
     setup_logging(settings.log_file)
 

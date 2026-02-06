@@ -1,0 +1,143 @@
+from nicegui import ui
+from controller import HeadlessController
+
+ctrl = HeadlessController()
+
+ui.colors(primary="#3B82F6", secondary="#10B981", accent="#8B5CF6", dark="#111827")
+ui.query("body").style("background-color: #0B0F19; color: #E5E7EB;")
+
+@ui.page("/")
+def main_dashboard():
+    with ui.header().classes("bg-gray-900 border-b border-gray-800 p-4 items-center gap-4"):
+        ui.icon("terminal", size="md").classes("text-primary")
+        ui.label("AGENTIC CONSOLE").classes("font-bold text-xl tracking-wider")
+        ui.space()
+        with ui.row().classes("items-center gap-2"):
+            ui.icon("circle", size="xs").classes("text-green-500 animate-pulse")
+            ui.label("SYSTEM ONLINE").classes("text-xs font-mono text-gray-400")
+        with ui.row().classes("items-center gap-2") as activity_row:
+            planner_badge = ui.badge("Planner", color="blue").classes("text-xs")
+            executor_badge = ui.badge("Executor", color="purple").classes("text-xs")
+            verifier_badge = ui.badge("Verifier", color="gray").classes("text-xs")
+
+    with ui.row().classes("w-full h-[calc(100vh-80px)] no-wrap"):
+        with ui.column().classes("w-2/3 h-full p-4 gap-4"):
+            ui.label("LIVE FEED").classes("text-xs font-bold text-gray-500 mb-2")
+            log_container = ui.scroll_area().classes(
+                "w-full flex-grow bg-gray-900/50 rounded-lg p-4 border border-gray-800"
+            )
+            with ui.row().classes("w-full gap-2 items-center bg-gray-800 p-2 rounded-xl border border-gray-700"):
+                input_cmd = ui.input(placeholder="Ask the agent to do anything...").classes(
+                    "w-full flex-grow text-lg no-underline"
+                ).props("borderless text-white")
+                ui.button(icon="send", on_click=lambda: run_task(input_cmd.value)).props(
+                    "flat round color=primary"
+                )
+                ui.button(icon="mic").props("flat round color=gray")
+                ui.button(icon="attach_file").props("flat round color=gray")
+
+        with ui.column().classes("w-1/3 h-full border-l border-gray-800 bg-gray-900/30 p-4"):
+            with ui.tabs().classes("w-full") as tabs:
+                tab_plan = ui.tab("Current Plan")
+                tab_mem = ui.tab("Memory")
+            with ui.tab_panels(tabs, value=tab_plan).classes("w-full bg-transparent"):
+                with ui.tab_panel(tab_plan):
+                    plan_container = ui.column().classes("w-full gap-2")
+                    with ui.row().classes("w-full mt-4 justify-end hidden") as approval_row:
+                        ui.button("Reject", color="red", icon="close").props("outline")
+                        approve_btn = ui.button("APPROVE RUN", color="green", icon="check")
+                with ui.tab_panel(tab_mem):
+                    ui.label("Active Context").classes("text-sm font-bold")
+                    ui.tree(
+                        [
+                            {
+                                "id": "root",
+                                "label": "Workspace",
+                                "children": [
+                                    {"id": "1", "label": "src/app.py"},
+                                    {"id": "2", "label": "docs/readme.md"},
+                                ],
+                            }
+                        ],
+                        label_key="label",
+                        tick_strategy="leaf",
+                    )
+
+    def render_logs():
+        log_container.clear()
+        with log_container:
+            for entry in reversed(ctrl.activity_log):
+                color = {
+                    "info": "gray",
+                    "error": "red",
+                    "success": "green",
+                    "tool": "purple",
+                    "agent": "blue",
+                    "event": "blue",
+                }.get(entry["type"], "blue")
+                icon = {
+                    "info": "info",
+                    "error": "warning",
+                    "success": "check_circle",
+                    "tool": "build",
+                    "agent": "smart_toy",
+                    "event": "bolt",
+                }.get(entry["type"], "smart_toy")
+                with ui.row().classes("w-full mb-2 gap-3 items-start"):
+                    ui.icon(icon).classes(f"text-{color}-400 mt-1")
+                    with ui.column().classes("gap-0"):
+                        ui.label(entry["message"]).classes("text-sm text-gray-200 font-mono")
+                        if entry.get("details"):
+                            ui.label(str(entry["details"]))
+                        ui.label(entry["ts"]).classes("text-[10px] text-gray-600")
+
+    def render_plan():
+        plan_container.clear()
+        run = ctrl.current_run
+        if not run:
+            with plan_container:
+                ui.label("No active plan").classes("text-gray-600 italic")
+            approval_row.classes(add="hidden")
+            return
+        with plan_container:
+            ui.label(f"Goal: {run.intent.get('goal', 'Unknown')}").classes("font-bold text-primary mb-2")
+            for step in run.plan_steps:
+                with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
+                    with ui.row().classes("items-center justify-between w-full"):
+                        ui.label(f"{step.step}. {step.action}").classes("font-bold font-mono text-sm")
+                        if step.value == "DONE":
+                            ui.badge("DONE", color="green")
+                        else:
+                            ui.badge("PENDING", color="gray")
+                    ui.label(step.target).classes("text-xs text-gray-400 break-all")
+        if run.status == "planned":
+            approval_row.classes(remove="hidden")
+            approve_btn.on_click(lambda: (ctrl.approve_run(run.run_id), render_plan()))
+
+    def render_activity():
+        text_blob = " ".join([e.get("message", "") for e in ctrl.activity_log[-20:]]).lower()
+        planner_active = "planning" in text_blob or "plan created" in text_blob
+        executor_active = "starting execution" in text_blob or "step" in text_blob
+        verifier_active = "verify" in text_blob or "verified" in text_blob
+        planner_badge.classes(remove="bg-gray", add="")
+        planner_badge.props(f"color={'blue' if planner_active else 'gray'}")
+        executor_badge.props(f"color={'purple' if executor_active else 'gray'}")
+        verifier_badge.props(f"color={'green' if verifier_active else 'gray'}")
+
+    async def run_task(text):
+        if not text:
+            return
+        input_cmd.value = ""
+        ctrl.plan_task(text)
+        render_logs()
+        render_plan()
+
+    ui.timer(1.0, render_logs)
+    ui.timer(1.0, render_plan)
+    ui.timer(1.0, render_activity)
+
+def run_dashboard():
+    ui.run(title="Agentic Console", dark=True, port=8333)
+
+if __name__ == "__main__":
+    run_dashboard()

@@ -8,3 +8,4 @@ build/
 .pytest_cache/
 tmp/
 AgenticConsole.spec
+ui/control_plane_src/node_modules/

@@ -221,3 +221,64 @@ OLLAMA_COST_OUTPUT_PER_1M=0
 python -m unittest discover -s tests
 python evals/run_evals.py
 ```
+## Local Dual-Peer Mode
+
+You can run two local AgenticConsole instances that talk to each other over A2A. This replaces the laptop/desktop split with two peers on localhost.
+
+### Launch (visible windows)
+
+```
+C:\Users\codym\AgenticConsole\scripts\launch_local_dual_peers.ps1
+```
+
+### Launch (hidden windows)
+
+```
+C:\Users\codym\AgenticConsole\scripts\launch_local_dual_peers_hidden.ps1
+```
+
+Default ports:
+- Peer A: A2A 9451, Web 8333
+- Peer B: A2A 9452, Web 8334
+
+You can open:
+- http://127.0.0.1:8333/dashboard (peer A)
+- http://127.0.0.1:8334/dashboard (peer B)
+
+Both peers are auto-linked via `AGENTIC_A2A_PEERS` and auto-reply is enabled.
+
+### Default: Local Dual-Peer on App Start
+
+By default, `app.py` now auto-launches two local peers and exits the launcher process. To disable:
+
+```
+set AGENTIC_LOCAL_DUAL_PEERS=false
+```
+
+To hide the peer windows:
+
+```
+set AGENTIC_LOCAL_DUAL_PEERS_HIDDEN=true
+```
+
+### Headless + NiceGUI Dashboard
+
+Run the headless controller with the new single-chat NiceGUI UI:
+
+```
+python C:\Users\codym\AgenticConsole\dashboard.py
+```
+
+This launches one chat interface. The controller decides which tools to use and runs the plan. Approvals are inline in the UI.
+
+### Default UI
+
+`app.py` now launches the NiceGUI dashboard by default (set `AGENTIC_UI=tk` to force legacy UI).
+
+### A2A Handshake
+
+Automatic peer handshakes are **off** by default. To enable:
+
+```
+set AGENTIC_A2A_HANDSHAKE=true
+```
