@@ -1,4 +1,4 @@
-# Desktop Linking: Codex Workstation <-> CODYDESKTOP
+﻿# Desktop Linking: Codex Workstation <-> CODYDESKTOP
 
 ## Goal (Plain English)
 Connect the two Windows machines so your Codex CLI can run commands on the desktop, copy files, and use the desktop's compute from this machine. This makes the system feel like one unified environment.
@@ -27,7 +27,7 @@ When prompted:
 - Type `yes` to trust the host key.
 - Enter your Windows password for `codym` on CODYDESKTOP.
 
-## If SSH says “Permission denied”
+## If SSH says "Permission denied"
 On CODYDESKTOP (Admin PowerShell):
 ```powershell
 notepad "C:\ProgramData\ssh\sshd_config"
@@ -101,6 +101,18 @@ Restart SSH after edits:
 Restart-Service sshd
 ```
 
+### Current public key (generated on codex-work)
+Use this exact key on CODYDESKTOP:
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKnHxexuAbVPO3dp9c/gzXKRtv+NdK+m8YULemImsDb6 codym@Work
+```
+
+### Add key on CODYDESKTOP (PowerShell)
+```powershell
+New-Item -ItemType Directory -Path $env:USERPROFILE\.ssh -Force
+Add-Content -Path $env:USERPROFILE\.ssh\authorized_keys -Value 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKnHxexuAbVPO3dp9c/gzXKRtv+NdK+m8YULemImsDb6 codym@Work'
+```
+
 ## Step 3: Add SSH aliases (this machine)
 Your SSH config:
 ```
@@ -127,7 +139,7 @@ desk dir C:\Users\codym
 ```
 
 ## If SSH times out
-SSH timeout means port 22 is blocked or sshd isn’t running. Re-run the Step 1 commands on CODYDESKTOP.
+SSH timeout means port 22 is blocked or sshd isn't running. Re-run the Step 1 commands on CODYDESKTOP.
 
 ## Optional: File Sharing (SMB)
 On CODYDESKTOP (Admin):
@@ -144,3 +156,4 @@ From this machine:
 ## Status
 - Tailscale: installed and logged in on both machines.
 - SSH: pending until CODYDESKTOP runs Step 1.
+
