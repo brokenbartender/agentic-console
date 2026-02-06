@@ -56,6 +56,7 @@ from calibration import confidence_from_evidence
 from deep_research import DeepResearch
 
 from multimodal import ocr_pdf, capture_screenshot
+from vla import LiveDriver
 from audio_io import record_and_transcribe, speak_text
 from cost import estimate_tokens
 from cognitive import slow_mode, dot_ensemble
@@ -336,6 +337,7 @@ class AgentApp:
         self._world_loop_enabled = os.getenv("AGENTIC_WORLD_LOOP", "false").lower() in ("1", "true", "yes", "on")
         self._cfo_enabled = os.getenv("AGENTIC_CFO", "false").lower() in ("1", "true", "yes", "on")
         self._vision_enabled = os.getenv("AGENTIC_VISION_LOOP", "false").lower() in ("1", "true", "yes", "on")
+        self._vla_enabled = os.getenv("AGENTIC_VLA_ENABLED", "false").lower() in ("1", "true", "yes", "on")
         self._jarvis_enabled = os.getenv("AGENTIC_JARVIS", "false").lower() in ("1", "true", "yes", "on")
         if self._dreaming_enabled:
             self._start_dreaming_loop()
@@ -366,6 +368,7 @@ class AgentApp:
         tool_prefixes.append("mcp_providers")
         tool_prefixes.append("lsp_find")
         tool_prefixes.append("lsp_inherits")
+        tool_prefixes.append("vla")
 
         # Capabilities handshake (dynamic discovery)
         try:
@@ -489,6 +492,9 @@ class AgentApp:
         self.pending_runs = {}
 
 
+        self.vla_driver = LiveDriver(self, self.settings.data_dir)
+        if self._vla_enabled:
+            self.vla_driver.start()
 
         self._build_ui()
         self._load_last_run()
@@ -3018,6 +3024,27 @@ class AgentApp:
 
             if lowered == "compliance":
                 self.log_line(compliance_checklist())
+                return
+
+            if lowered.startswith("vla"):
+                parts = cmd.split(" ", 2)
+                action = parts[1].strip().lower() if len(parts) > 1 else ""
+                if action in ("start", "on"):
+                    if len(parts) > 2:
+                        self.vla_driver.set_goal(parts[2])
+                    self.vla_driver.start()
+                elif action in ("stop", "off"):
+                    self.vla_driver.stop()
+                elif action == "pause":
+                    self.vla_driver.pause()
+                elif action == "resume":
+                    self.vla_driver.resume()
+                elif action == "goal" and len(parts) > 2:
+                    self.vla_driver.set_goal(parts[2])
+                elif action in ("status", ""):
+                    self.log_line(json.dumps(self.vla_driver.status(), indent=2))
+                else:
+                    self.log_line("Usage: vla start|stop|pause|resume|goal <text>|status")
                 return
 
 

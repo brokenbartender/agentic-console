@@ -20,6 +20,17 @@ AGENTIC_VISION_FPS=1
 ```
 Requires: `pyautogui`, `pytesseract`.
 
+## VLA Live Mode (Vision-to-Action)
+```
+AGENTIC_VLA_ENABLED=true
+AGENTIC_VLA_MODEL=gpt-4o-mini
+AGENTIC_VLA_INTERVAL=1.0
+AGENTIC_VLA_GRID=6
+AGENTIC_VLA_READONLY=true
+AGENTIC_VLA_ACTIONS=click,scroll,wait,stop
+```
+Commands: `vla start|stop|pause|resume|goal <text>|status`.
+
 ## CFO Agent (Cost Governance)
 ```
 AGENTIC_CFO=true
