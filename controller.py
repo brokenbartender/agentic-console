@@ -11,7 +11,20 @@ from config import get_settings
 from engine import AgentEngine
 from orchestrator.state import OrchestratorState
 from app import AgentApp, TaskRun, PlanStep
-from tools.registry import UnifiedToolRegistry
+try:
+    from tools.registry import UnifiedToolRegistry
+except Exception:
+    import importlib.util as _importlib_util
+    import sys as _sys
+    _tools_registry_path = os.path.join(os.path.dirname(__file__), "tools", "registry.py")
+    _spec = _importlib_util.spec_from_file_location("tools_registry", _tools_registry_path)
+    if _spec and _spec.loader:
+        _mod = _importlib_util.module_from_spec(_spec)
+        _sys.modules["tools_registry"] = _mod
+        _spec.loader.exec_module(_mod)
+        UnifiedToolRegistry = _mod.UnifiedToolRegistry
+    else:
+        raise
 from core.schemas import (
     PlanSchema,
     PlanStepSchema,

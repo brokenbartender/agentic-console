@@ -2936,6 +2936,44 @@ class AgentApp:
                 return False, f"test_passes:error:{exc}"
         return False, f"verify:unknown_type:{vtype}"
 
+    def _evaluate_success_check(self, step: PlanStepSchema, result: ToolResult) -> tuple[bool, str]:
+        sc = step.success_check
+        if not sc:
+            return True, ""
+        if isinstance(sc, dict):
+            sc_type = (sc.get("type") or "").lower()
+            if sc_type in ("output_contains", "file_exists", "dom_present", "uia_present", "sql_returns", "test_passes"):
+                verify = VerifySchema(type=sc_type, params=sc)
+                temp = PlanStepSchema(
+                    step_id=step.step_id,
+                    title=step.title,
+                    intent=step.intent,
+                    tool=step.tool,
+                    args=step.args,
+                    verify=verify,
+                )
+                return self._verify_step(temp, result)
+            if sc_type == "window_title":
+                target = (sc.get("value") or "").lower()
+                try:
+                    nodes = snapshot_uia(limit=200)
+                except Exception:
+                    nodes = []
+                found = any(target in (n.get("title") or "").lower() for n in nodes)
+                return found, f"window_title:{target}"
+            if sc_type == "uia_contains":
+                target = (sc.get("name") or "").lower()
+                try:
+                    nodes = snapshot_uia(limit=500)
+                except Exception:
+                    nodes = []
+                found = any(target in (n.get("title") or "").lower() for n in nodes)
+                return found, f"uia_contains:{target}"
+            return False, f"success_check_failed:{sc}"
+        if str(sc).lower() in (result.output_preview or "").lower():
+            return True, f"output_contains:{sc}"
+        return False, f"success_check_failed:{sc}"
+
     def _run_plan_schema(self, plan: PlanSchema, report: ExecutionReport | None = None, start_step_id: int | None = None) -> ExecutionReport:
         if report is None:
             report = ExecutionReport(
@@ -3078,41 +3116,24 @@ class AgentApp:
                     except Exception:
                         pass
                 if tr.ok and step.success_check:
-                    if isinstance(step.success_check, dict):
-                        sc = step.success_check
-                        sc_type = sc.get("type")
-                        if sc_type == "uia_contains":
-                            target = (sc.get("name") or "").lower()
-                            try:
-                                nodes = snapshot_uia(limit=500)
-                            except Exception:
-                                nodes = []
-                            found = any(target in (n.get("title") or "").lower() for n in nodes)
-                            if not found:
-                                tr.ok = False
-                                tr.error = f"success_check_failed: {step.success_check}"
-                        elif sc_type == "window_title":
-                            target = (sc.get("value") or "").lower()
-                            try:
-                                nodes = snapshot_uia(limit=200)
-                            except Exception:
-                                nodes = []
-                            found = any(target in (n.get("title") or "").lower() for n in nodes)
-                            if not found:
-                                tr.ok = False
-                                tr.error = f"success_check_failed: {step.success_check}"
-                        else:
-                            tr.ok = False
-                            tr.error = f"success_check_failed: {step.success_check}"
-                    else:
-                        if str(step.success_check).lower() not in (tr.output_preview or "").lower():
-                            tr.ok = False
-                            tr.error = f"success_check_failed: {step.success_check}"
+                    ok_sc, evidence = self._evaluate_success_check(step, tr)
+                    if not ok_sc:
+                        tr.ok = False
+                        tr.error = evidence or f"success_check_failed: {step.success_check}"
                 self._log_event(
                     "tool_call_finished",
                     {"tool": tr.name, "ok": tr.ok, "output_preview": tr.output_preview, "error": tr.error},
                     extra={"step_id": step.step_id},
                 )
+                if not tr.ok:
+                    backoff = 0.5
+                    if isinstance(step.args, dict):
+                        try:
+                            backoff = float(step.args.get("backoff_s") or 0.5)
+                        except Exception:
+                            backoff = 0.5
+                    if attempt < step.max_attempts:
+                        time.sleep(backoff * attempt)
                 if tr.ok:
                     verified, evidence = self._verify_step(step, tr)
                     step_rep.verification_passed = verified

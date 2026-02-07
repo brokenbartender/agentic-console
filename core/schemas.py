@@ -53,8 +53,36 @@ class PlanSchema:
     budget: Budget = field(default_factory=Budget)
     created_at: float = 0.0
     model: str = ""
-    needs_user_input: bool = False
-    questions: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class ToolCall:
+    name: str
+    args: str
+    risk: str
+    run_id: str
+    step_id: Optional[int]
+    timestamp: float
+    dry_run: bool = False
+    trace_id: str = ""
+
+
+@dataclass
+class TaskEvent:
+    event_type: str
+    payload: Dict[str, Any]
+    run_id: str = ""
+    step_id: Optional[int] = None
+    trace_id: str = ""
+    timestamp: float = 0.0
+
+
+@dataclass
+class RunHeartbeat:
+    run_id: str
+    status: str
+    timestamp: float
+    trace_id: str = ""
 
 
 @dataclass

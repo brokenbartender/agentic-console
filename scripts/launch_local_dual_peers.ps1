@@ -11,7 +11,9 @@ param(
 
 function Start-AgentCmd($name, $webPort, $a2aPort, $peerName, $peerPort) {
   $cmd = 'cd /d C:\\Users\\codym\\AgenticConsole&& set AGENTIC_DATA_DIR=C:\\Users\\codym\\AgenticConsole\\data&& set AGENTIC_NODE_NAME={0}&& set AGENTIC_WEB_PORT={1}&& set AGENTIC_A2A_PORT={2}&& set AGENTIC_A2A_PEERS={3}:127.0.0.1:{4}&& "{5}" "{6}"' -f $name, $webPort, $a2aPort, $peerName, $peerPort, $Python, $AppPath
-  Start-Process cmd.exe -ArgumentList "/k", $cmd
+  Start-Process powershell -WindowStyle Hidden -ArgumentList @(
+    '-NoProfile','-ExecutionPolicy','Bypass','-Command',$cmd
+  ) | Out-Null
 }
 
 Start-AgentCmd $NameA $WebPortA $A2aPortA $NameB $A2aPortB

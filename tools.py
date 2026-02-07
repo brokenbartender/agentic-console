@@ -11,8 +11,26 @@ from privacy import (
     is_path_allowed,
 )
 from executor import files as exec_files
-from tools.computer import ComputerController
-from tools.vm import VMController
+import importlib.util
+
+
+def _load_tool_module(module_name: str, rel_path: str):
+    base = os.path.dirname(__file__)
+    path = os.path.join(base, rel_path)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load tool module: {rel_path}")
+    module = importlib.util.module_from_spec(spec)
+    import sys
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_computer_mod = _load_tool_module("tools_computer", os.path.join("tools", "computer.py"))
+_vm_mod = _load_tool_module("tools_vm", os.path.join("tools", "vm.py"))
+ComputerController = _computer_mod.ComputerController
+VMController = _vm_mod.VMController
 
 
 class ToolNeedsConfirmation(RuntimeError):
