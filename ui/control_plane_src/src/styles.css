@@ -385,6 +385,27 @@ main {
   overflow: auto;
 }
 
+.terminal-panel {
+  width: 100%;
+  height: 260px;
+  border-radius: 12px;
+  border: 1px solid #1e293b;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+.xterm {
+  height: 100%;
+}
+
+.reactflow-wrapper {
+  width: 100%;
+  height: 420px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+}
+
 .agent-badges {
   display: flex;
   gap: 8px;
@@ -548,6 +569,51 @@ pre {
   padding: 10px;
   background: #fff;
   font-size: 12px;
+}
+
+.genui-block {
+  display: grid;
+  gap: 8px;
+}
+
+.genui-table {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.genui-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+}
+
+.genui-row.genui-head {
+  background: #e0e7ff;
+  font-weight: 600;
+}
+
+.genui-cell {
+  padding: 6px 8px;
+  border-right: 1px solid #c7d2fe;
+  border-bottom: 1px solid #c7d2fe;
+  font-size: 12px;
+}
+
+.genui-row:last-child .genui-cell {
+  border-bottom: none;
+}
+
+.genui-row .genui-cell:last-child {
+  border-right: none;
+}
+
+.ui-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .badge {

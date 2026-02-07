@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
+import ReactFlow, { Background, Controls, MiniMap } from "reactflow";
+import { Terminal } from "xterm";
+import { FitAddon } from "xterm-addon-fit";
+import "reactflow/dist/style.css";
+import "xterm/css/xterm.css";
 
 const DEFAULT_PERSONAS = [
   { id: "Coder", label: "Coder Agent" },
@@ -95,6 +100,37 @@ function formatTimestamp(ts) {
 
 function renderUICard(ui) {
   if (!ui || typeof ui !== "object") return null;
+  if (ui.type === "table") {
+    const columns = Array.isArray(ui.columns) ? ui.columns : [];
+    const rows = Array.isArray(ui.rows) ? ui.rows : [];
+    return (
+      <div className="tool" style={{ background: "#eef2ff" }}>
+        <div><strong>{ui.title || "Table"}</strong></div>
+        <div className="genui-table">
+          <div className="genui-row genui-head">
+            {columns.map((c, idx) => (
+              <div key={`col-${idx}`} className="genui-cell">{c}</div>
+            ))}
+          </div>
+          {rows.map((row, idx) => (
+            <div key={`row-${idx}`} className="genui-row">
+              {row.map((cell, cidx) => (
+                <div key={`cell-${idx}-${cidx}`} className="genui-cell">{cell}</div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  if (ui.type === "approval") {
+    return (
+      <div className="tool" style={{ background: "#fff7ed" }}>
+        <div><strong>{ui.title || "Approval"}</strong></div>
+        <div className="muted" style={{ marginTop: 6 }}>{ui.summary || "Action requires approval."}</div>
+      </div>
+    );
+  }
   if (ui.type === "flight_card") {
     return (
       <div className="tool" style={{ background: "#eef2ff" }}>
@@ -122,6 +158,58 @@ function renderUICard(ui) {
       <pre className="mono">{JSON.stringify(ui, null, 2)}</pre>
     </div>
   );
+}
+
+function renderUIActions(actions = [], onAction) {
+  if (!Array.isArray(actions) || !actions.length) return null;
+  return (
+    <div className="ui-actions">
+      {actions.map((action, idx) => (
+        <button
+          key={`action-${idx}`}
+          className={action.primary ? "primary" : "secondary"}
+          onClick={() => onAction(action)}
+        >
+          {action.label || action.type || `Action ${idx + 1}`}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TerminalPanel({ lines }) {
+  const containerRef = useRef(null);
+  const terminalRef = useRef(null);
+  const fitRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return undefined;
+    if (!terminalRef.current) {
+      const term = new Terminal({
+        fontFamily: "JetBrains Mono, monospace",
+        fontSize: 12,
+        theme: { background: "#0f172a", foreground: "#e2e8f0" },
+        convertEol: true,
+      });
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(containerRef.current);
+      fit.fit();
+      terminalRef.current = term;
+      fitRef.current = fit;
+    }
+    const resize = () => fitRef.current?.fit();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+
+  useEffect(() => {
+    if (!terminalRef.current) return;
+    terminalRef.current.reset();
+    (lines || []).forEach((line) => terminalRef.current.writeln(line));
+  }, [lines]);
+
+  return <div className="terminal-panel" ref={containerRef} />;
 }
 
 function eventBadge(eventType) {
@@ -252,6 +340,15 @@ export default function App() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: cmd }),
+    });
+  }
+
+  async function handleUIAction(action) {
+    if (!action) return;
+    await fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: `ui_action ${JSON.stringify(action)}` }),
     });
   }
 
@@ -488,12 +585,19 @@ export default function App() {
                         {events.slice(0, 8).map((e, idx) => {
                           const ui = extractUI(e.payload || {});
                           const badge = eventBadge(e.event_type || "");
+                          const uiPayload = e.payload?.payload || e.payload || {};
+                          const actions = uiPayload.ui?.actions || [];
                           return (
                             <div key={`${e.event_type}-${idx}`} className="event-line">
                               <span className={`badge ${badge}`}>{e.event_type}</span>
                               <span className="mono">{eventSummary(e) || "event"}</span>
                               <span className="meta">{new Date((e.timestamp || 0) * 1000).toLocaleTimeString()}</span>
-                              {ui ? renderUICard(ui) : null}
+                              {ui ? (
+                                <div className="genui-block">
+                                  {renderUICard(ui)}
+                                  {renderUIActions(actions, handleUIAction)}
+                                </div>
+                              ) : null}
                             </div>
                           );
                         })}
@@ -582,7 +686,7 @@ export default function App() {
 
                 <div className="card">
                   <h3>Live Terminal Stream</h3>
-                  <pre className="mono terminal-stream">{terminal.join("\n") || "No output yet."}</pre>
+                  <TerminalPanel lines={terminal} />
                 </div>
 
                 <div className="card">
@@ -916,48 +1020,33 @@ export default function App() {
 function BrainView({ graph, width = 800, height = 420 }) {
   const nodes = graph.nodes || [];
   const edges = graph.edges || [];
-  const radius = Math.min(width, height) / 3;
-  const positions = {};
-
-  nodes.forEach((n, i) => {
-    const angle = (i / Math.max(1, nodes.length)) * Math.PI * 2;
-    positions[n.id] = {
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius,
-    };
-  });
-
+  const flowNodes = nodes.map((n, idx) => ({
+    id: n.id,
+    data: { label: n.label || n.id },
+    position: { x: 120 * (idx % 4), y: 100 * Math.floor(idx / 4) },
+    style: {
+      borderRadius: 12,
+      padding: 10,
+      border: "1px solid #c7d2fe",
+      background: n.type === "local" ? "#dbeafe" : "#eff6ff",
+      fontSize: 12,
+    },
+  }));
+  const flowEdges = edges.map((e, idx) => ({
+    id: `e-${idx}`,
+    source: e.source,
+    target: e.target,
+    label: e.count ? `${e.count}` : undefined,
+    animated: true,
+    style: { stroke: "#2563eb" },
+  }));
   return (
-    <svg width="100%" height="420" viewBox={`${-width / 2} ${-height / 2} ${width} ${height}`}>
-      <g>
-        {edges.map((e, idx) => {
-          const s = positions[e.source];
-          const t = positions[e.target];
-          if (!s || !t) return null;
-          return (
-            <line
-              key={`edge-${idx}`}
-              x1={s.x}
-              y1={s.y}
-              x2={t.x}
-              y2={t.y}
-              stroke="#2563eb"
-              strokeWidth={Math.max(1, e.count / 2)}
-            />
-          );
-        })}
-        {nodes.map((n) => {
-          const pos = positions[n.id] || { x: 0, y: 0 };
-          return (
-            <g key={n.id}>
-              <circle cx={pos.x} cy={pos.y} r="18" fill={n.type === "local" ? "#0ea5e9" : "#2563eb"} />
-              <text x={pos.x} y={pos.y + 4} textAnchor="middle" fill="#fff" fontSize="12">
-                {n.label}
-              </text>
-            </g>
-          );
-        })}
-      </g>
-    </svg>
+    <div className="reactflow-wrapper" style={{ width, height }}>
+      <ReactFlow nodes={flowNodes} edges={flowEdges} fitView>
+        <MiniMap />
+        <Controls />
+        <Background gap={16} color="#e2e8f0" />
+      </ReactFlow>
+    </div>
   );
 }
