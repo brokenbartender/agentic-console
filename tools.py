@@ -12,6 +12,7 @@ from privacy import (
 )
 from executor import files as exec_files
 from tools.computer import ComputerController
+from tools.vm import VMController
 
 
 class ToolNeedsConfirmation(RuntimeError):
@@ -41,8 +42,10 @@ class ToolRegistry:
         self.allowed_paths = parse_allowed_paths(app.settings.allowed_paths)
         self.allowed_domains = parse_allowed_domains(app.settings.allowed_domains)
         self.computer = ComputerController(app)
+        self.vm = VMController(app)
         self.tools = {
             "computer": self._computer,
+            "vm": self._vm,
             "browse": self._browse,
             "search": self._search,
             "click": self._click,
@@ -58,6 +61,7 @@ class ToolRegistry:
         }
         self.specs = {
             "computer": ToolSpec("computer", "caution", arg_hint="computer <json payload>", min_parts=1, splitter=" "),
+            "vm": ToolSpec("vm", "caution", arg_hint="vm <json payload>", min_parts=1, splitter=" "),
             "browse": ToolSpec("browse", "safe", arg_hint="browse <url>", min_parts=1, splitter=" "),
             "search": ToolSpec("search", "safe", arg_hint="search <query>", min_parts=1, splitter=" "),
             "click": ToolSpec("click", "safe", arg_hint="click <selector>", min_parts=1, splitter=" "),
@@ -139,6 +143,12 @@ class ToolRegistry:
         except Exception:
             raise RuntimeError("computer expects json payload")
         return self.computer.run(data)
+
+    def _vm(self, raw: str):
+        payload = raw.strip()
+        if not payload:
+            raise RuntimeError("vm requires a payload")
+        return self.vm.call(payload)
 
     def _search(self, raw):
         q = raw.strip()
