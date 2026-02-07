@@ -51,6 +51,11 @@ async def _event_stream() -> None:
                 last_ts = ts
                 etype = ev.get("type") or ev.get("event_type")
                 payload = ev.get("payload")
+                if etype == "agent_handoff" and isinstance(payload, dict):
+                    role = payload.get("role") or "Agent"
+                    tools = payload.get("tools") or []
+                    await cl.Message(content=f"Agent handoff: **{role}**\nTools: {', '.join(tools)}").send()
+                    continue
                 if etype == "ui_block" and isinstance(payload, dict):
                     ui_block = payload.get("ui") or {}
                     kind = ui_block.get("type")
@@ -66,7 +71,29 @@ async def _event_stream() -> None:
                         await cl.Message(content=ui_block.get("message", "")).send()
                         continue
                     if kind == "form":
-                        await cl.Message(content=f"Form requested: {ui_block.get('title','Form')}").send()
+                        cl.user_session.set("pending_form", ui_block)
+                        fields = ui_block.get("fields") or []
+                        lines = [f"Form requested: {ui_block.get('title','Form')}"]
+                        for f in fields:
+                            label = f.get("label") or f.get("key") or "field"
+                            placeholder = f.get("placeholder") or ""
+                            if placeholder:
+                                lines.append(f"- {label} ({placeholder})")
+                            else:
+                                lines.append(f"- {label}")
+                        await cl.Message(content="\n".join(lines)).send()
+                        await cl.Message(content="Reply with JSON of field values.").send()
+                        continue
+                    if kind == "diff":
+                        diff_text = ui_block.get("diff") or ""
+                        if diff_text:
+                            await cl.Message(content="Diff:").send()
+                            await cl.Message(content=f"```diff\n{diff_text}\n```").send()
+                        continue
+                    if kind == "timeline":
+                        items = ui_block.get("items") or []
+                        lines = [f"- {i}" for i in items]
+                        await cl.Message(content="Timeline:\n" + "\n".join(lines)).send()
                         continue
                 await cl.Step(name="Event", type="tool").send(
                     output=json.dumps({"type": etype, "payload": payload}, indent=2)
@@ -87,6 +114,20 @@ async def start() -> None:
 @cl.on_message
 async def on_message(message: cl.Message) -> None:
     text = message.content.strip()
+    pending_form = cl.user_session.get("pending_form")
+    if pending_form:
+        try:
+            data = json.loads(text)
+        except Exception:
+            await cl.Message(content="Invalid JSON. Please reply with JSON like {\"field\": \"value\"}.").send()
+            return
+        cl.user_session.set("pending_form", None)
+        try:
+            output = ctrl.handle_command("submit_form " + json.dumps(data))
+        except Exception as exc:
+            output = f"Error: {exc}"
+        await cl.Message(content=output or "Form submitted.").send()
+        return
     # Risky command approval
     if any(k in text.lower() for k in ("delete", "drop", "format", "wipe", "destroy")):
         res = await cl.AskActionMessage(
