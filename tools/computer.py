@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -22,6 +23,7 @@ class ComputerObservation:
     active_window: str
     cursor: Dict[str, int]
     screenshot_size: int
+    screenshot_hash: str = ""
 
 
 class ComputerController:
@@ -40,10 +42,16 @@ class ComputerController:
         except Exception:
             uia_path = None
         screenshot_size = 0
+        screenshot_hash = ""
         try:
             screenshot_size = os.path.getsize(screenshot_path)
         except Exception:
             screenshot_size = 0
+        try:
+            with open(screenshot_path, "rb") as handle:
+                screenshot_hash = hashlib.sha1(handle.read()).hexdigest()
+        except Exception:
+            screenshot_hash = ""
         cursor = {"x": 0, "y": 0}
         if pyautogui is not None:
             try:
@@ -58,6 +66,7 @@ class ComputerController:
             active_window="",
             cursor=cursor,
             screenshot_size=screenshot_size,
+            screenshot_hash=screenshot_hash,
         )
 
     def _act_desktop(self, action: str, params: Dict[str, Any]) -> str:
@@ -149,6 +158,7 @@ class ComputerController:
                 "active_window": obs.active_window,
                 "cursor": obs.cursor,
                 "screenshot_size": obs.screenshot_size,
+                "screenshot_hash": obs.screenshot_hash,
             }
         if mode == "act":
             action = payload.get("action") or ""

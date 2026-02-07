@@ -2423,6 +2423,39 @@ class AgentApp:
         value = self.memory.get("computer_desktop_approval") or os.getenv("AGENTIC_DESKTOP_APPROVAL", "true")
         return str(value).lower() in ("1", "true", "yes", "on")
 
+    def _tool_risk(self, name: str) -> str:
+        spec = self.tools.specs.get(name)
+        return (spec.risk if spec else "unknown") or "unknown"
+
+    def _issue_token(self, name: str) -> None:
+        self.memory.set(f"approval_token:{name}", str(time.time()))
+
+    def _consume_token(self, name: str, ttl_seconds: int = 600) -> bool:
+        key = f"approval_token:{name}"
+        value = self.memory.get(key)
+        if not value:
+            return False
+        try:
+            ts = float(value)
+        except Exception:
+            self.memory.set(key, "")
+            return False
+        if time.time() - ts > ttl_seconds:
+            self.memory.set(key, "")
+            return False
+        self.memory.set(key, "")
+        return True
+
+    def _needs_approval(self, name: str, args: dict | None = None) -> bool:
+        risk = self._tool_risk(name)
+        if name == "computer":
+            backend = self._get_computer_backend(args or {})
+            if backend == "desktop" and self._desktop_requires_approval():
+                return True
+        if risk == "destructive" and not self._consume_token(name):
+            return True
+        return requires_confirmation(risk, getattr(self.settings, "autonomy_level", "semi"))
+
     def _run_plan_schema(self, plan: PlanSchema, report: ExecutionReport | None = None, start_step_id: int | None = None) -> ExecutionReport:
         if report is None:
             report = ExecutionReport(
@@ -2468,10 +2501,7 @@ class AgentApp:
                     report.status = "failed"
                     report.failure_reason = "Budget exceeded: max_tool_calls"
                     break
-            if step.tool == "computer":
-                backend = self._get_computer_backend(step.args if isinstance(step.args, dict) else {})
-                if backend == "desktop" and self._desktop_requires_approval():
-                    step.requires_confirmation = True
+            step.requires_confirmation = step.requires_confirmation or self._needs_approval(step.tool, step.args if isinstance(step.args, dict) else {})
             if step.requires_confirmation:
                 if self.memory.get(f"deny_tool:{step.tool}") == "true":
                     self._current_step_id = None
@@ -2518,16 +2548,25 @@ class AgentApp:
                     {"tool": step.tool, "args": step.args, "attempt": attempt},
                     extra={"step_id": step.step_id},
                 )
+                before_hash = ""
                 if step.tool == "computer":
                     try:
-                        self.tools.computer.observe(os.path.join(self.settings.data_dir, "runs", plan.run_id))
+                        obs = self.tools.computer.observe(os.path.join(self.settings.data_dir, "runs", plan.run_id))
+                        before_hash = getattr(obs, "screenshot_hash", "") or ""
                     except Exception:
                         pass
                 tr = self._execute_step_schema(step)
                 step_rep.tool_results.append(tr)
                 if step.tool == "computer":
                     try:
-                        self.tools.computer.observe(os.path.join(self.settings.data_dir, "runs", plan.run_id))
+                        obs_after = self.tools.computer.observe(os.path.join(self.settings.data_dir, "runs", plan.run_id))
+                        after_hash = getattr(obs_after, "screenshot_hash", "") or ""
+                        expect_change = True
+                        if isinstance(step.args, dict):
+                            expect_change = bool(step.args.get("expect_change", True))
+                        if expect_change and before_hash and after_hash and before_hash == after_hash and not step.success_check:
+                            tr.ok = False
+                            tr.error = "no_ui_change_detected"
                     except Exception:
                         pass
                 if tr.ok and step.success_check:
@@ -3521,6 +3560,8 @@ class AgentApp:
                 if lowered_instr == "approve_never" and name:
                     self.memory.set(f"deny_tool:{name}", "true")
                     return f"Denied tool {name}."
+                if self._tool_risk(name) == "destructive":
+                    self._issue_token(name)
                 out = self._execute_tool(name, args, confirm=True)
                 try:
                     pending_step = self.memory.get("pending_step_id")

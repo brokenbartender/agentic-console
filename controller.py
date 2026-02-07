@@ -236,10 +236,13 @@ class HeadlessController:
         )
         tool_calls = 0
         for step in plan.steps:
-            if step.tool == "computer":
-                backend = self.get_computer_backend()
-                if backend == "desktop" and self.get_desktop_approval():
-                    step.requires_confirmation = True
+            try:
+                step.requires_confirmation = step.requires_confirmation or self.app._needs_approval(step.tool, step.args if isinstance(step.args, dict) else {})
+            except Exception:
+                if step.tool == "computer":
+                    backend = self.get_computer_backend()
+                    if backend == "desktop" and self.get_desktop_approval():
+                        step.requires_confirmation = True
             step_report = StepReport(step_id=step.step_id, title=step.title, status="running")
             report.steps.append(step_report)
             for attempt in range(1, step.max_attempts + 1):
