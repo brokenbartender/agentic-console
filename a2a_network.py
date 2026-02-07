@@ -5,6 +5,7 @@ import uuid
 import time
 import threading
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, Tuple
 
@@ -67,7 +68,7 @@ class A2ANetwork:
         self._server.server_close()
         self._server = None
 
-    def send(self, peer: str, sender: str, receiver: str, message) -> None:
+    def send(self, peer: str, sender: str, receiver: str, message, retries: int = 2, backoff_s: float = 0.5) -> str:
         if peer not in self.peers:
             raise RuntimeError(f"Unknown peer: {peer}")
         host, port = self.peers[peer]
@@ -80,9 +81,25 @@ class A2ANetwork:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"A2A send failed: {resp.status}")
+        last_err = None
+        for attempt in range(retries + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    if resp.status != 200:
+                        raise RuntimeError(f"A2A send failed: {resp.status}")
+                    body = resp.read().decode("utf-8", errors="ignore")
+                    try:
+                        ack = json.loads(body) if body else {}
+                    except Exception:
+                        ack = {}
+                    return ack.get("message_id") or payload.get("message_id") or ""
+            except (urllib.error.URLError, RuntimeError) as exc:
+                last_err = exc
+                if attempt < retries:
+                    time.sleep(backoff_s * (attempt + 1))
+                else:
+                    raise RuntimeError(f"A2A send failed: {exc}") from exc
+        raise RuntimeError(f"A2A send failed: {last_err}")
 
     def broadcast(self, sender: str, receiver: str, message: str) -> None:
         for peer in self.peers:
@@ -146,7 +163,10 @@ class A2ANetwork:
                     except Exception:
                         pass
                 self.send_response(200)
+                self.send_header("Content-Type", "application/json")
                 self.end_headers()
+                body = json.dumps({"ok": True, "message_id": payload.get("message_id")}).encode("utf-8")
+                self.wfile.write(body)
 
             def log_message(self, format, *args):
                 return
