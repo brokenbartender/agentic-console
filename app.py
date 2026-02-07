@@ -1585,7 +1585,7 @@ class AgentApp:
         steps = self._build_plan(cmd)
         plan_schema = None
         try:
-            if os.getenv("AGENTIC_LLM_PLANNER", "false").lower() in ("1", "true", "yes", "on"):
+            if os.getenv("AGENTIC_LLM_PLANNER", "true").lower() in ("1", "true", "yes", "on"):
                 plan_schema = self._plan_with_llm(cmd)
                 if plan_schema:
                     steps = self._plan_schema_to_steps(plan_schema)
@@ -2265,7 +2265,15 @@ class AgentApp:
 
     def _tool_catalog(self) -> list[dict]:
         try:
-            return UnifiedToolRegistry.from_legacy(self).list()
+            tools = UnifiedToolRegistry.from_legacy(self).list()
+            # Keep prompt size bounded.
+            if len(tools) > 40:
+                tools = tools[:40]
+            for t in tools:
+                desc = t.get("description") or ""
+                if len(desc) > 200:
+                    t["description"] = desc[:200]
+            return tools
         except Exception:
             return []
 
@@ -2300,10 +2308,16 @@ class AgentApp:
             return None
         if not raw:
             return None
+        data = None
         try:
             data = json.loads(raw)
         except Exception:
-            return None
+            try:
+                fix_prompt = "Fix this into valid PlanSchema JSON only, no prose. Content:\n" + raw
+                repaired = self._agent_chat(fix_prompt) or ""
+                data = json.loads(repaired)
+            except Exception:
+                return None
         try:
             steps = []
             for idx, s in enumerate(data.get("steps") or [], 1):
@@ -2516,6 +2530,10 @@ class AgentApp:
                         self.tools.computer.observe(os.path.join(self.settings.data_dir, "runs", plan.run_id))
                     except Exception:
                         pass
+                if tr.ok and step.success_check:
+                    if step.success_check.lower() not in (tr.output_preview or "").lower():
+                        tr.ok = False
+                        tr.error = f"success_check_failed: {step.success_check}"
                 self._log_event(
                     "tool_call_finished",
                     {"tool": tr.name, "ok": tr.ok, "output_preview": tr.output_preview, "error": tr.error},
@@ -3522,7 +3540,7 @@ class AgentApp:
             return "Nothing to confirm."
 
         plan_schema = None
-        if os.getenv("AGENTIC_LLM_PLANNER", "false").lower() in ("1", "true", "yes", "on"):
+        if os.getenv("AGENTIC_LLM_PLANNER", "true").lower() in ("1", "true", "yes", "on"):
             plan_schema = self._plan_with_llm(instruction)
         plan = self.planner.plan(instruction) if plan_schema is None else []
         if plan_schema is None and plan:
