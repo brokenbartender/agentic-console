@@ -50,6 +50,7 @@ from telemetry_otel import OTelTracer
 from task_queue import TaskQueue
 
 from tools import ToolRegistry, ToolContext, ToolNeedsConfirmation
+from tools.registry import UnifiedToolRegistry
 from executor import files as exec_files
 from executor.execute import execute_tool
 
@@ -1584,22 +1585,27 @@ class AgentApp:
         steps = self._build_plan(cmd)
         plan_schema = None
         try:
-            schema_steps = [self._step_to_schema(i + 1, s.command or f"{s.action} {s.target}".strip()) for i, s in enumerate(steps)]
-            plan_schema = PlanSchema(
-                run_id=run_id,
-                trace_id=trace_id,
-                goal=cmd,
-                success_criteria=["No errors and user intent satisfied"],
-                steps=schema_steps,
-                constraints={"demo_mode": self.demo_mode},
-                budget=Budget(
-                    max_steps=getattr(self.settings, "max_plan_steps", 20) or 20,
-                    max_tool_calls=int(getattr(self.settings, "max_tool_calls_per_task", 50) or 50),
-                    max_seconds=900,
-                ),
-                created_at=time.time(),
-                model=getattr(self.settings, "openai_model", ""),
-            )
+            if os.getenv("AGENTIC_LLM_PLANNER", "false").lower() in ("1", "true", "yes", "on"):
+                plan_schema = self._plan_with_llm(cmd)
+                if plan_schema:
+                    steps = self._plan_schema_to_steps(plan_schema)
+            if plan_schema is None:
+                schema_steps = [self._step_to_schema(i + 1, s.command or f"{s.action} {s.target}".strip()) for i, s in enumerate(steps)]
+                plan_schema = PlanSchema(
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    goal=cmd,
+                    success_criteria=["No errors and user intent satisfied"],
+                    steps=schema_steps,
+                    constraints={"demo_mode": self.demo_mode},
+                    budget=Budget(
+                        max_steps=getattr(self.settings, "max_plan_steps", 20) or 20,
+                        max_tool_calls=int(getattr(self.settings, "max_tool_calls_per_task", 50) or 50),
+                        max_seconds=900,
+                    ),
+                    created_at=time.time(),
+                    model=getattr(self.settings, "openai_model", ""),
+                )
         except Exception:
             plan_schema = None
         plan_json = json.dumps(
@@ -2257,6 +2263,91 @@ class AgentApp:
             requires_confirmation=False,
         )
 
+    def _tool_catalog(self) -> list[dict]:
+        try:
+            return UnifiedToolRegistry.from_legacy(self).list()
+        except Exception:
+            return []
+
+    def _plan_schema_to_steps(self, plan_schema: PlanSchema) -> list[PlanStep]:
+        steps: list[PlanStep] = []
+        for s in plan_schema.steps:
+            steps.append(
+                PlanStep(
+                    step=s.step_id,
+                    action=s.tool or "execute",
+                    target=s.title,
+                    value="",
+                    reason=s.intent or "planned",
+                    command=s.args.get("command") or f"{s.tool} {json.dumps(s.args)}".strip(),
+                )
+            )
+        return steps
+
+    def _plan_with_llm(self, instruction: str) -> PlanSchema | None:
+        tools = self._tool_catalog()
+        if not tools:
+            return None
+        prompt = (
+            "Return ONLY JSON for PlanSchema. Include goal, success_criteria, steps with tool and args. "
+            "Available tools:\n"
+            + json.dumps(tools, indent=2)
+        )
+        raw = ""
+        try:
+            raw = self._agent_chat(prompt + "\nUser goal: " + instruction) or ""
+        except Exception:
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return None
+        try:
+            steps = []
+            for idx, s in enumerate(data.get("steps") or [], 1):
+                tool = (s.get("tool") or "").strip()
+                tool_meta = next((t for t in tools if t["name"] == tool), None)
+                if tool and tool_meta is None:
+                    tool = ""
+                risk = (tool_meta or {}).get("risk_level", "safe")
+                steps.append(
+                    PlanStepSchema(
+                        step_id=int(s.get("step_id") or idx),
+                        title=s.get("title") or tool or f"step {idx}",
+                        intent=s.get("intent") or "",
+                        tool=tool,
+                        args=s.get("args") or {},
+                        risk=risk,
+                        requires_confirmation=bool((tool_meta or {}).get("requires_approval", False)),
+                        max_attempts=int(s.get("max_attempts") or 2),
+                        timeout_s=int(s.get("timeout_s") or 90),
+                        success_check=s.get("success_check") or "",
+                    )
+                )
+            if not steps:
+                return None
+            budget = data.get("budget") or {}
+            return PlanSchema(
+                run_id=data.get("run_id") or datetime.utcnow().strftime("%Y-%m-%d_%H%M%S"),
+                trace_id=data.get("trace_id") or str(uuid.uuid4()),
+                goal=data.get("goal") or instruction,
+                success_criteria=data.get("success_criteria") or ["Task completed without errors"],
+                steps=steps,
+                assumptions=data.get("assumptions") or [],
+                constraints=data.get("constraints") or {},
+                budget=Budget(
+                    max_steps=int(budget.get("max_steps") or getattr(self.settings, "max_plan_steps", 20) or 20),
+                    max_tool_calls=int(budget.get("max_tool_calls") or getattr(self.settings, "max_tool_calls_per_task", 50) or 50),
+                    max_seconds=int(budget.get("max_seconds") or 900),
+                ),
+                created_at=time.time(),
+                model=data.get("model") or "",
+            )
+        except Exception:
+            return None
+
     def _execute_step_schema(self, step: PlanStepSchema) -> ToolResult:
         t0 = time.time()
         ok = False
@@ -2493,6 +2584,76 @@ class AgentApp:
                 json.dump(state, handle, indent=2)
         except Exception:
             return
+
+    def _latest_observations(self, run_id: str) -> dict:
+        base = os.path.join(self.settings.data_dir, "runs", run_id)
+        latest_screen = ""
+        latest_uia = ""
+        if not os.path.isdir(base):
+            return {"screenshot": "", "uia": ""}
+        try:
+            screens = []
+            uias = []
+            for name in os.listdir(base):
+                path = os.path.join(base, name)
+                if name.startswith("screen-") and name.endswith(".png"):
+                    try:
+                        screens.append((os.path.getmtime(path), path))
+                    except Exception:
+                        continue
+                if name.startswith("uia-") and name.endswith(".json"):
+                    try:
+                        uias.append((os.path.getmtime(path), path))
+                    except Exception:
+                        continue
+            if screens:
+                screens.sort(key=lambda x: x[0], reverse=True)
+                latest_screen = screens[0][1]
+            if uias:
+                uias.sort(key=lambda x: x[0], reverse=True)
+                latest_uia = uias[0][1]
+        except Exception:
+            return {"screenshot": "", "uia": ""}
+        return {"screenshot": latest_screen, "uia": latest_uia}
+
+    def _build_reflection_prompt(self, instruction: str, plan_schema: PlanSchema, report: ExecutionReport) -> str:
+        failed_step = None
+        for step in report.steps:
+            if step.status in ("failed", "skipped"):
+                failed_step = step
+        if failed_step is None and report.steps:
+            failed_step = report.steps[-1]
+        last_result = ""
+        last_error = ""
+        if failed_step and failed_step.tool_results:
+            last = failed_step.tool_results[-1]
+            last_result = last.output_preview or ""
+            last_error = last.error or ""
+        obs = self._latest_observations(plan_schema.run_id)
+        constraints = plan_schema.constraints or {}
+        budget = plan_schema.budget.__dict__ if plan_schema.budget else {}
+        parts = [
+            "Fix failures using evidence.",
+            f"Original task: {instruction}",
+            f"Failure reason: {report.failure_reason}",
+        ]
+        if failed_step:
+            parts.append(f"Failed step: {failed_step.step_id} - {failed_step.title}")
+        if last_error:
+            parts.append("Last error:")
+            parts.append(last_error)
+        if last_result:
+            parts.append("Last output preview:")
+            parts.append(last_result[:2000])
+        if obs.get("screenshot"):
+            parts.append(f"Latest screenshot: {obs['screenshot']}")
+        if obs.get("uia"):
+            parts.append(f"Latest UIA: {obs['uia']}")
+        if constraints:
+            parts.append(f"Constraints: {json.dumps(constraints)}")
+        if budget:
+            parts.append(f"Budget: {json.dumps(budget)}")
+        return "\n".join(parts)
 
     def _execute_tool(self, name: str, args: str, confirm: bool = False, dry_run: bool = False):
 
@@ -3360,8 +3521,11 @@ class AgentApp:
 
             return "Nothing to confirm."
 
-        plan = self.planner.plan(instruction)
-        if plan:
+        plan_schema = None
+        if os.getenv("AGENTIC_LLM_PLANNER", "false").lower() in ("1", "true", "yes", "on"):
+            plan_schema = self._plan_with_llm(instruction)
+        plan = self.planner.plan(instruction) if plan_schema is None else []
+        if plan_schema is None and plan:
             max_steps = getattr(self.settings, "max_plan_steps", 0)
             if max_steps and len(plan) > max_steps:
                 self._log_event(
@@ -3392,7 +3556,12 @@ class AgentApp:
                 created_at=time.time(),
                 model=getattr(self.settings, "openai_model", ""),
             )
+        if plan_schema:
             if getattr(self, "current_run", None):
+                if not plan_schema.run_id:
+                    plan_schema.run_id = self.current_run.run_id
+                if not plan_schema.trace_id:
+                    plan_schema.trace_id = self.current_run.trace_id
                 self.current_run.plan_schema = plan_schema
 
             self._log_event(
@@ -3420,13 +3589,13 @@ class AgentApp:
 
             if report.status in ("failed", "error"):
                 # One reflection pass: replan based on failure evidence.
-                reflect_prompt = f"Fix failures: {report.failure_reason}. Original task: {instruction}"
+                reflect_prompt = self._build_reflection_prompt(instruction, plan_schema, report)
                 reflect_plan = self.planner.plan(reflect_prompt)
                 if reflect_plan:
                     steps = [self._step_to_schema(i + 1, s) for i, s in enumerate(reflect_plan)]
                     plan_schema = PlanSchema(
-                        run_id=run_id,
-                        trace_id=trace_id,
+                        run_id=plan_schema.run_id,
+                        trace_id=plan_schema.trace_id,
                         goal=reflect_prompt,
                         success_criteria=["No errors and user intent satisfied"],
                         steps=steps,
