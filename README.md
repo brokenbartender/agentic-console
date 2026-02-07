@@ -1,26 +1,58 @@
 # Agentic Console
 
-Agentic Console is a local agent operating system: one chat UI, two-agent plan/execute loop, and a clear safety model.
+Agentic Console is a local agent operating system: one chat UI, a plan/execute loop, and a clear safety model.
 
-## 60-second quickstart
+## 5-minute demo
 
-1. Install requirements:
+1. Install Python UI dependencies.
 
 ```
 pip install nicegui
 ```
 
-2. Start the app:
+2. Build the control plane UI.
 
 ```
-python C:\Users\codym\AgenticConsole\app.py
+cd ui\control_plane_src
+npm install
+npm run build
 ```
 
-3. Open the UI:
+3. Start the agent runtime.
 
 ```
-http://127.0.0.1:8333
+python app.py
 ```
+
+4. Open the control plane.
+
+```
+http://127.0.0.1:8333/dashboard
+```
+
+5. Try a quick workflow.
+
+```
+Draft a plan to audit the repo for UI regressions and summarize risks.
+```
+
+6. Approve the run, then open Artifacts, Run History, and Run Diff to compare two runs.
+
+7. Sanity-check the environment.
+
+```
+python runtime\run.py doctor
+```
+
+## Quickstart
+
+1. Install requirements.
+
+```
+pip install nicegui
+```
+
+2. Start the app and open `http://127.0.0.1:8333/dashboard`.
 
 ## What problem this solves
 
@@ -35,10 +67,11 @@ Everything runs through `runtime/run.py` and the lifecycle loop in `runtime/life
 Examples:
 
 ```
-python C:\Users\codym\AgenticConsole\runtime\run.py run "analyze this repo and summarize risks" --two-agent
-python C:\Users\codym\AgenticConsole\runtime\run.py agent tools
-python C:\Users\codym\AgenticConsole\runtime\run.py memory show
-python C:\Users\codym\AgenticConsole\runtime\run.py workflow list
+python runtime\run.py run "analyze this repo and summarize risks" --two-agent
+python runtime\run.py agent tools
+python runtime\run.py memory show
+python runtime\run.py workflow list
+python runtime\run.py doctor
 ```
 
 ## Safety & trust model
@@ -55,8 +88,12 @@ python C:\Users\codym\AgenticConsole\runtime\run.py workflow list
 
 ## UI
 
-- Default UI: NiceGUI dashboard (`dashboard.py`)
+- Default UI: control plane dashboard (`/dashboard`)
 - Legacy UI: set `AGENTIC_UI=tk`
+
+## Examples
+
+Sample prompts live in `examples/`.
 
 ## A2A handshake
 

@@ -33,9 +33,10 @@ import hashlib
 import platform
 import sys
 import asyncio
+from urllib.parse import urlparse, parse_qs
 import shlex
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 
 
@@ -53,7 +54,20 @@ from telemetry_otel import OTelTracer
 from task_queue import TaskQueue
 
 from tools import ToolRegistry, ToolContext, ToolNeedsConfirmation
-from tools.registry import UnifiedToolRegistry
+try:
+    from tools.registry import UnifiedToolRegistry
+except Exception:
+    import importlib.util as _importlib_util
+    import sys as _sys
+    _tools_registry_path = os.path.join(os.path.dirname(__file__), "tools", "registry.py")
+    _spec = _importlib_util.spec_from_file_location("tools_registry", _tools_registry_path)
+    if _spec and _spec.loader:
+        _mod = _importlib_util.module_from_spec(_spec)
+        _sys.modules["tools_registry"] = _mod
+        _spec.loader.exec_module(_mod)
+        UnifiedToolRegistry = _mod.UnifiedToolRegistry
+    else:
+        raise
 from executor import files as exec_files
 from executor.execute import execute_tool
 
@@ -139,6 +153,7 @@ from core.schemas import (
     ToolResult,
     Budget,
 )
+from core.run_state import list_run_dirs, summarize_run
 
 
 # Lazy imports for optional dependencies
@@ -5248,40 +5263,42 @@ def _make_web_handler(app):
 
 
         def do_GET(self):
+            parsed = urlparse(self.path)
+            path = parsed.path
 
-            if self.path == "/favicon.ico":
+            if path == "/favicon.ico":
 
                 self._send(HTTPStatus.NO_CONTENT, b"", "image/x-icon")
 
                 return
 
-            if self.path == "/health":
+            if path == "/health":
 
                 self._send(HTTPStatus.OK, b"ok", "text/plain")
 
                 return
 
-            if self.path == "/api/metrics":
+            if path == "/api/metrics":
                 body = json.dumps(app.metrics.snapshot()).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/trace":
+            if path == "/api/trace":
                 body = json.dumps(app.memory.recent_events(50)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/jobs":
+            if path == "/api/jobs":
                 body = json.dumps(app.jobs.list(20)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/models":
+            if path == "/api/models":
                 body = json.dumps(app.memory.model_summary(20)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/a2a":
+            if path == "/api/a2a":
                 body = json.dumps(app.a2a.recent(20)).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/tools":
+            if path == "/api/tools":
                 specs = []
                 try:
                     for name, spec in app.tools.specs.items():
@@ -5298,7 +5315,7 @@ def _make_web_handler(app):
                 body = json.dumps(specs).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/config":
+            if path == "/api/config":
                 try:
                     data = app.settings.__dict__
                 except Exception:
@@ -5306,7 +5323,7 @@ def _make_web_handler(app):
                 body = json.dumps(data).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/log_tail":
+            if path == "/api/log_tail":
                 limit = 200
                 try:
                     limit = int(self.headers.get("X-Lines", "200"))
@@ -5322,7 +5339,7 @@ def _make_web_handler(app):
                 body = json.dumps({"lines": lines}).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/vla_latest":
+            if path == "/api/vla_latest":
                 img = ""
                 try:
                     vla_dir = os.path.join(app.settings.data_dir, "vla")
@@ -5339,7 +5356,7 @@ def _make_web_handler(app):
                 body = json.dumps({"image": img}).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/graph":
+            if path == "/api/graph":
                 nodes = []
                 edges = {}
                 try:
@@ -5361,7 +5378,7 @@ def _make_web_handler(app):
                 body = json.dumps(payload).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/rag_sources":
+            if path == "/api/rag_sources":
                 sources = []
                 try:
                     sources = app.rag.list_sources()
@@ -5370,7 +5387,7 @@ def _make_web_handler(app):
                 body = json.dumps(sources).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/roles":
+            if path == "/api/roles":
                 roles = []
                 try:
                     if hasattr(app.team, "roles"):
@@ -5380,21 +5397,34 @@ def _make_web_handler(app):
                 body = json.dumps(roles).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/pending_runs":
+            if path == "/api/pending_runs":
                 pending = []
                 try:
                     for run_id, run in app.pending_runs.items():
+                        steps = []
+                        for step in getattr(run, "plan_steps", []) or []:
+                            if isinstance(step, dict):
+                                steps.append(step)
+                            else:
+                                steps.append({
+                                    "step": getattr(step, "step", 0),
+                                    "action": getattr(step, "action", ""),
+                                    "target": getattr(step, "target", ""),
+                                    "value": getattr(step, "value", ""),
+                                    "reason": getattr(step, "reason", ""),
+                                    "command": getattr(step, "command", ""),
+                                })
                         pending.append({
                             "run_id": run_id,
                             "intent": getattr(run, "intent", ""),
-                            "plan_steps": getattr(run, "plan_steps", []),
+                            "plan_steps": steps,
                         })
                 except Exception:
                     pending = []
                 body = json.dumps(pending).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/api/user_profile":
+            if path == "/api/user_profile":
                 profile = {}
                 try:
                     profile = app.memory.get_user_profile("default")
@@ -5403,9 +5433,30 @@ def _make_web_handler(app):
                 body = json.dumps(profile).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path.startswith("/assets/"):
+            if path == "/api/runs":
+                runs = []
                 try:
-                    rel_path = self.path.lstrip("/")
+                    base = os.path.join(app.settings.data_dir, "runs")
+                    runs = [summarize_run(os.path.join(base, d)) for d in list_run_dirs(base)]
+                except Exception:
+                    runs = []
+                body = json.dumps(runs).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if path == "/api/run_diff":
+                qs = parse_qs(parsed.query or "")
+                run_a = (qs.get("run_a") or [""])[0]
+                run_b = (qs.get("run_b") or [""])[0]
+                if not run_a or not run_b:
+                    self._send(HTTPStatus.BAD_REQUEST, b"missing run ids", "text/plain")
+                    return
+                diff_text = app._diff_runs(run_a, run_b)
+                body = json.dumps({"diff": diff_text}).encode("utf-8")
+                self._send(HTTPStatus.OK, body, "application/json")
+                return
+            if path.startswith("/assets/"):
+                try:
+                    rel_path = path.lstrip("/")
                     ui_root = os.path.abspath(os.path.join(app.settings.data_dir, "..", "ui", "control_plane"))
                     asset_path = os.path.abspath(os.path.join(ui_root, rel_path))
                     if not asset_path.startswith(ui_root):
@@ -5429,7 +5480,7 @@ def _make_web_handler(app):
                 except Exception:
                     self._send(HTTPStatus.INTERNAL_SERVER_ERROR, b"asset error", "text/plain")
                 return
-            if self.path == "/api/cockpit":
+            if path == "/api/cockpit":
                 payload = {
                     "metrics": app.metrics.snapshot(),
                     "a2a": app.a2a.recent(20),
@@ -5438,7 +5489,7 @@ def _make_web_handler(app):
                 body = json.dumps(payload).encode("utf-8")
                 self._send(HTTPStatus.OK, body, "application/json")
                 return
-            if self.path == "/dashboard":
+            if path == "/dashboard":
                 try:
                     ui_path = os.path.join(app.settings.data_dir, "..", "ui", "control_plane", "index.html")
                     ui_path = os.path.abspath(ui_path)
@@ -5448,7 +5499,7 @@ def _make_web_handler(app):
                     html = "<h2>Control Plane UI not found.</h2>"
                 self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html")
                 return
-            if self.path != "/":
+            if path != "/":
 
                 self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
 

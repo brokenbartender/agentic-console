@@ -42,6 +42,19 @@ function extractArtifacts(events) {
   return null;
 }
 
+function extractUIBlocks(events) {
+  const blocks = [];
+  events.forEach((e, idx) => {
+    if (!e || e.event_type !== "ui_block") return;
+    const payload = e.payload?.payload || e.payload || {};
+    const ui = payload.ui;
+    if (ui && typeof ui === "object") {
+      blocks.push({ id: `${e.event_type}-${idx}`, ui, timestamp: e.timestamp || 0 });
+    }
+  });
+  return blocks;
+}
+
 function extractUI(payload) {
   const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
   const fenced = raw.match(/```ui([\s\S]*?)```/i);
@@ -61,6 +74,23 @@ function extractUI(payload) {
     }
   }
   return null;
+}
+
+function eventSummary(event) {
+  if (!event) return "";
+  const payload = event.payload?.payload || event.payload || {};
+  if (typeof payload === "string") return payload;
+  if (payload.message) return payload.message;
+  if (payload.intent) return payload.intent;
+  if (payload.ui && payload.ui.title) return payload.ui.title;
+  return "";
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return "";
+  const date = new Date(ts * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
 }
 
 function renderUICard(ui) {
@@ -117,7 +147,6 @@ export default function App() {
   const [persona, setPersona] = useState("");
   const [configText, setConfigText] = useState("{}");
   const [hudImage, setHudImage] = useState("");
-  const [tab, setTab] = useState("a2a");
   const [artifactMode, setArtifactMode] = useState("preview");
   const [showSheet, setShowSheet] = useState(false);
   const [showBrain, setShowBrain] = useState(false);
@@ -126,8 +155,16 @@ export default function App() {
   const [files, setFiles] = useState([]);
   const [memoryQuery, setMemoryQuery] = useState("");
   const [memoryResults, setMemoryResults] = useState([]);
+  const [runHistory, setRunHistory] = useState([]);
+  const [runDiff, setRunDiff] = useState("");
+  const [runDiffError, setRunDiffError] = useState("");
+  const [runDiffLoading, setRunDiffLoading] = useState(false);
+  const [runA, setRunA] = useState("");
+  const [runB, setRunB] = useState("");
+  const [clarificationInputs, setClarificationInputs] = useState({});
 
   const artifact = useMemo(() => extractArtifacts(events), [events]);
+  const uiBlocks = useMemo(() => extractUIBlocks(events), [events]);
   const suggestions = useMemo(() => commandHistory.slice(0, 5), [commandHistory]);
 
   async function refresh() {
@@ -179,6 +216,13 @@ export default function App() {
       const pending = await fetch("/api/pending_runs").then((r) => r.json());
       setPendingRuns(pending || []);
     } catch {}
+
+    try {
+      const runs = await fetch("/api/runs").then((r) => r.json());
+      setRunHistory(runs || []);
+      if (!runA && runs && runs.length) setRunA(runs[0].run_id);
+      if (!runB && runs && runs.length > 1) setRunB(runs[1].run_id || runs[0].run_id);
+    } catch {}
   }
 
   useInterval(refresh, REFRESH_INTERVAL_MS);
@@ -200,6 +244,15 @@ export default function App() {
     setCommandHistory((prev) => [cmd, ...prev.filter((c) => c !== cmd)].slice(0, 10));
     setCommand("");
     setFiles([]);
+  }
+
+  async function sendQuickCommand(cmd) {
+    if (!cmd) return;
+    await fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: cmd }),
+    });
   }
 
   async function approve(runId) {
@@ -255,7 +308,49 @@ export default function App() {
     } catch {}
   }
 
+  async function fetchRunDiff() {
+    if (!runA || !runB) return;
+    setRunDiffLoading(true);
+    setRunDiffError("");
+    try {
+      const res = await fetch(`/api/run_diff?run_a=${encodeURIComponent(runA)}&run_b=${encodeURIComponent(runB)}`);
+      if (!res.ok) {
+        setRunDiffError(`Diff failed: ${res.status}`);
+        setRunDiff("");
+      } else {
+        const data = await res.json();
+        setRunDiff(data.diff || "");
+      }
+    } catch (err) {
+      setRunDiffError(`Diff error: ${err}`);
+      setRunDiff("");
+    } finally {
+      setRunDiffLoading(false);
+    }
+  }
+
+  function updateClarification(blockId, key, value) {
+    setClarificationInputs((prev) => ({
+      ...prev,
+      [blockId]: {
+        ...(prev[blockId] || {}),
+        [key]: value,
+      },
+    }));
+  }
+
+  async function submitClarification(blockId) {
+    const values = clarificationInputs[blockId] || {};
+    await fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: `submit_form ${JSON.stringify(values)}` }),
+    });
+  }
+
   const sessionItems = useMemo(() => events.slice(0, 6), [events]);
+  const activeRun = pendingRuns[0];
+  const planSteps = Array.isArray(activeRun?.plan_steps) ? activeRun.plan_steps : [];
 
   const omniBar = (
     <div className="omni-bar">
@@ -361,97 +456,156 @@ export default function App() {
             </aside>
 
             <section className="panel">
-              <div>
-                <h3>Live Canvas</h3>
-                <div className="stream">
-                  {events.map((e, idx) => {
-                    const ui = extractUI(e.payload || {});
-                    const badge = eventBadge(e.event_type || "");
-                    return (
-                      <details key={`${e.event_type}-${idx}`} className="event">
-                        <summary>
-                          <span className={`badge ${badge}`}>{e.event_type}</span>
-                          <span className="mono" style={{ marginLeft: 8 }}>{new Date((e.timestamp || 0) * 1000).toLocaleTimeString()}</span>
-                        </summary>
-                        <div className="mono">{JSON.stringify(e.payload || {}, null, 2)}</div>
-                        {ui ? renderUICard(ui) : null}
-                      </details>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div>
-                <div className="tabs" id="detail-tabs">
-                  {[
-                    { key: "a2a", label: "A2A" },
-                    { key: "terminal", label: "Terminal" },
-                    { key: "sources", label: "Sources" },
-                    { key: "tools", label: "Tools" },
-                  ].map((item) => (
-                    <button
-                      key={item.key}
-                      className={`tab ${tab === item.key ? "active" : ""}`}
-                      onClick={() => setTab(item.key)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="stack">
-                  {tab === "a2a" && (
-                    <div>
-                      <h3>A2A Feed</h3>
-                      <div className="stream">
-                        {a2a.map((m, idx) => (
-                          <div key={`${m.sender}-${idx}`} className="event">
-                            <strong>{m.sender}</strong> → {m.receiver}
-                            <div className="mono">{m.message}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {tab === "terminal" && (
-                    <div>
-                      <h3>Terminal Output</h3>
-                      <pre className="mono">{terminal.join("\n") || "No output yet."}</pre>
-                    </div>
-                  )}
-                  {tab === "sources" && (
-                    <div>
-                      <h3>Sources</h3>
-                      {sources.length ? sources.map((s, idx) => {
-                        const name = (s.source || "").split(/[\\/]/).slice(-1)[0] || s.source;
-                        return (
-                          <div key={`${name}-${idx}`} className="source-card">
-                            <div className="source-icon">{name.slice(0, 1).toUpperCase()}</div>
-                            <div>
-                              <strong>{name}</strong>
-                              <div style={{ fontSize: 12, color: "var(--muted)" }}>{s.source}</div>
-                              <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                                chunks={s.chunks} rank={(s.avg_rank || 0).toFixed(2)}
+              <div className="panel-grid">
+                <div className="card unified">
+                  <div className="split-head">
+                    <h3>Unified Flow</h3>
+                    <div className="mono">Run: {activeRun?.run_id || "—"}</div>
+                  </div>
+                  <div className="split">
+                    <div className="split-col">
+                      <h4>Plan</h4>
+                      {planSteps.length ? (
+                        <ol className="plan-list">
+                          {planSteps.map((s, idx) => (
+                            <li key={`${s.step || idx}`}>
+                              <span className="plan-step">{s.step || idx + 1}</span>
+                              <div>
+                                <strong>{s.action || "step"}</strong>
+                                <div className="mono">{s.target || s.command || "—"}</div>
+                                <div className="muted">{s.reason || "No rationale yet."}</div>
                               </div>
-                            </div>
-                          </div>
-                        );
-                      }) : <div className="event">No sources indexed.</div>}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <pre className="mono">{plan || "No active plan yet."}</pre>
+                      )}
                     </div>
-                  )}
-                  {tab === "tools" && (
-                    <div>
-                      <h3>Tools</h3>
-                      <div className="tool-grid">
-                        {tools.map((t) => (
-                          <div key={t.name} className="tool">
-                            <div><strong>{t.name}</strong></div>
-                            <div className="mono">{t.arg_hint || ""}</div>
-                            <div style={{ color: "var(--muted)" }}>risk: {t.risk || "n/a"}</div>
-                          </div>
-                        ))}
+                    <div className="split-col">
+                      <h4>Execution</h4>
+                      <div className="stream compact">
+                        {events.slice(0, 8).map((e, idx) => {
+                          const ui = extractUI(e.payload || {});
+                          const badge = eventBadge(e.event_type || "");
+                          return (
+                            <div key={`${e.event_type}-${idx}`} className="event-line">
+                              <span className={`badge ${badge}`}>{e.event_type}</span>
+                              <span className="mono">{eventSummary(e) || "event"}</span>
+                              <span className="meta">{new Date((e.timestamp || 0) * 1000).toLocaleTimeString()}</span>
+                              {ui ? renderUICard(ui) : null}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                  )}
+                  </div>
+                </div>
+
+                <div className="card">
+                  <h3>Approvals & Clarifications</h3>
+                  <div className="approval-grid">
+                    {pendingRuns.map((run) => {
+                      const intent = typeof run.intent === "string"
+                        ? run.intent
+                        : (run.intent?.command || run.intent?.goal || "Pending run");
+                      return (
+                        <div key={run.run_id} className="approval-card">
+                          <div className="approval-title">
+                            <strong>{intent}</strong>
+                            <span className="mono">{run.run_id.slice(0, 8)}</span>
+                          </div>
+                          <div className="approval-steps">
+                            {(run.plan_steps || []).slice(0, 5).map((s, idx) => (
+                              <div key={`${run.run_id}-${idx}`} className="approval-step">
+                                {s.step || idx + 1}. {s.action || "step"} → {s.target || s.command || "—"}
+                              </div>
+                            ))}
+                          </div>
+                          <div className="actions">
+                            <button className="primary" onClick={() => approve(run.run_id)}>Approve</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {uiBlocks.filter((b) => b.ui.type === "form").map((block) => {
+                      const fields = Array.isArray(block.ui.fields) ? block.ui.fields : [];
+                      return (
+                        <div key={block.id} className="approval-card">
+                          <div className="approval-title">
+                            <strong>{block.ui.title || "Clarification needed"}</strong>
+                            <span className="mono">{new Date(block.timestamp * 1000).toLocaleTimeString()}</span>
+                          </div>
+                          <div className="form-grid">
+                            {fields.map((f, idx) => {
+                              const key = typeof f === "string"
+                                ? f
+                                : (f.key || f.name || f.label || `field_${idx + 1}`);
+                              const label = typeof f === "string"
+                                ? f
+                                : (f.label || f.name || f.key || `Field ${idx + 1}`);
+                              return (
+                                <label key={`${block.id}-${key}`} className="form-field">
+                                  <span>{label}</span>
+                                  <input
+                                    value={clarificationInputs[block.id]?.[key] || ""}
+                                    onChange={(event) => updateClarification(block.id, key, event.target.value)}
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+                          <div className="actions">
+                            <button className="secondary" onClick={() => submitClarification(block.id)}>Submit</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {uiBlocks.filter((b) => b.ui.type === "approval").map((block) => (
+                      <div key={block.id} className="approval-card">
+                        <div className="approval-title">
+                          <strong>{block.ui.title || "Approval requested"}</strong>
+                          <span className="mono">{new Date(block.timestamp * 1000).toLocaleTimeString()}</span>
+                        </div>
+                        <div className="actions">
+                          <button className="primary" onClick={() => sendQuickCommand("approve_once")}>Approve Once</button>
+                          <button className="secondary" onClick={() => sendQuickCommand("approve_always")}>Always Allow</button>
+                          <button className="secondary" onClick={() => sendQuickCommand("approve_never")}>Never Allow</button>
+                        </div>
+                      </div>
+                    ))}
+                    {!pendingRuns.length && !uiBlocks.length && (
+                      <div className="event">No approvals or clarifications right now.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="card">
+                  <h3>Live Terminal Stream</h3>
+                  <pre className="mono terminal-stream">{terminal.join("\n") || "No output yet."}</pre>
+                </div>
+
+                <div className="card">
+                  <h3>Agents, Tools & Graph</h3>
+                  <div className="agent-badges">
+                    {personas.map((p) => (
+                      <span key={p.id} className={`badge ${persona === p.id ? "success" : ""}`}>
+                        {p.label || p.id}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="tool-grid compact">
+                    {tools.slice(0, 8).map((t) => (
+                      <div key={t.name} className="tool">
+                        <div><strong>{t.name}</strong></div>
+                        <div className="mono">{t.arg_hint || ""}</div>
+                        <div style={{ color: "var(--muted)" }}>risk: {t.risk || "n/a"}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="graph-mini">
+                    <BrainView graph={graph} width={520} height={260} />
+                  </div>
                 </div>
               </div>
             </section>
@@ -490,6 +644,51 @@ export default function App() {
               ) : (
                 <pre>No artifacts yet.</pre>
               )}
+
+              <div className="run-history">
+                <h4>Run History</h4>
+                <div className="run-list">
+                  {runHistory.length ? runHistory.map((run) => (
+                    <div key={run.run_id} className="run-item">
+                      <div>
+                        <strong>{run.goal || "Untitled run"}</strong>
+                        <div className="mono">{run.run_id}</div>
+                        <div className="muted">{run.status || "unknown"} • {formatTimestamp(run.updated_at) || "—"}</div>
+                      </div>
+                      <div className="run-actions">
+                        <button className="ghost" onClick={() => setRunA(run.run_id)}>Use A</button>
+                        <button className="ghost" onClick={() => setRunB(run.run_id)}>Use B</button>
+                      </div>
+                    </div>
+                  )) : <div className="event">No runs yet.</div>}
+                </div>
+              </div>
+
+              <div className="diff-panel">
+                <h4>Run Diff</h4>
+                <div className="diff-controls">
+                  <select value={runA} onChange={(e) => setRunA(e.target.value)}>
+                    <option value="">Select Run A</option>
+                    {runHistory.map((run) => (
+                      <option key={`a-${run.run_id}`} value={run.run_id}>{run.run_id}</option>
+                    ))}
+                  </select>
+                  <select value={runB} onChange={(e) => setRunB(e.target.value)}>
+                    <option value="">Select Run B</option>
+                    {runHistory.map((run) => (
+                      <option key={`b-${run.run_id}`} value={run.run_id}>{run.run_id}</option>
+                    ))}
+                  </select>
+                  <button className="secondary" onClick={fetchRunDiff} disabled={runDiffLoading}>
+                    {runDiffLoading ? "Diffing..." : "Diff Runs"}
+                  </button>
+                </div>
+                {runDiffError ? (
+                  <div className="event">{runDiffError}</div>
+                ) : (
+                  <pre className="mono">{runDiff || "Select two runs to compare."}</pre>
+                )}
+              </div>
             </aside>
           </section>
         )}
@@ -714,11 +913,9 @@ export default function App() {
   );
 }
 
-function BrainView({ graph }) {
+function BrainView({ graph, width = 800, height = 420 }) {
   const nodes = graph.nodes || [];
   const edges = graph.edges || [];
-  const width = 800;
-  const height = 420;
   const radius = Math.min(width, height) / 3;
   const positions = {};
 
