@@ -60,6 +60,7 @@ class Settings:
     event_retention_seconds: int = int(_env("AGENTIC_EVENT_RETENTION_SECONDS", "2592000"))
     audit_retention_seconds: int = int(_env("AGENTIC_AUDIT_RETENTION_SECONDS", _env("AGENTIC_EVENT_RETENTION_SECONDS", "2592000")))
     debug_retention_seconds: int = int(_env("AGENTIC_DEBUG_RETENTION_SECONDS", _env("AGENTIC_EVENT_RETENTION_SECONDS", "2592000")))
+    policy_path: str = _env("AGENTIC_POLICY_PATH", "")
     demo_mode: str = _env("AGENTIC_DEMO_MODE", "true")
     openai_cost_input_per_million: float = float(_env("OPENAI_COST_INPUT_PER_1M", "0"))
     openai_cost_output_per_million: float = float(_env("OPENAI_COST_OUTPUT_PER_1M", "0"))

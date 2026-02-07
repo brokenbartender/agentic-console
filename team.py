@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 
@@ -9,6 +9,7 @@ class AgentRole:
     name: str
     instructions: str
     sop: str = ""
+    allowed_tools: List[str] = field(default_factory=list)
 
 
 class TeamOrchestrator:
@@ -37,10 +38,14 @@ class TeamOrchestrator:
             role = self.select_next_speaker(remaining, context)
             remaining = [r for r in remaining if r != role]
             sop_text = f"SOP: {role.sop}\n" if role.sop else ""
+            tools_text = ""
+            if role.allowed_tools:
+                tools_text = f"Allowed tools: {', '.join(role.allowed_tools)}\n"
             prompt = (
                 f"Role: {role.name}\n"
                 f"Instructions: {role.instructions}\n"
                 f"{sop_text}"
+                f"{tools_text}"
                 f"Context so far:\n{context}\n\n"
                 f"Task: {task}"
             )
@@ -66,3 +71,15 @@ class TeamOrchestrator:
                             context += f"\n[{r.name}] {fix_out}\n"
                             break
         return "\n\n".join(outputs)
+
+
+class TwoAgentOrchestrator:
+    def __init__(self, planner_chat, executor_chat):
+        self.planner_chat = planner_chat
+        self.executor_chat = executor_chat
+
+    def run(self, task: str) -> str:
+        plan = self.planner_chat(f"Planner: create a short plan.\nTask: {task}")
+        exec_out = self.executor_chat(f"Executor: execute this plan.\nPlan:\n{plan}\nTask: {task}")
+        review = self.planner_chat(f"Planner: verify success criteria and note issues.\nOutput:\n{exec_out}")
+        return "\n\n".join(["## Planner Plan", plan or "", "## Executor", exec_out or "", "## Planner Review", review or ""])

@@ -151,6 +151,23 @@ def main_dashboard():
                     ui.label(card.get("subtitle", ""))
                     if card.get("button"):
                         ui.button(card["button"], on_click=lambda: run_task(card.get("action", ""))).props("flat color=primary")
+        if kind == "form":
+            fields = payload.get("fields") or []
+            values = {}
+            with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
+                ui.label(payload.get("title", "Form")).classes("text-sm")
+                for f in fields:
+                    key = f.get("key") or f.get("name") or ""
+                    label = f.get("label") or key
+                    if not key:
+                        continue
+                    values[key] = ui.input(label=label, placeholder=f.get("placeholder", "")).classes("w-full")
+                def _submit():
+                    data = {k: v.value for k, v in values.items()}
+                    handle_command("submit_form " + json.dumps(data))
+                ui.button("Submit", on_click=_submit).props("flat color=primary")
+        if kind == "toast":
+            ui.label(payload.get("message", "")).classes("text-xs text-orange-300")
 
     def render_plan():
         plan_container.clear()

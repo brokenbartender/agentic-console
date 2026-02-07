@@ -1,4 +1,5 @@
 import os
+import re
  
 
 import threading
@@ -192,6 +193,7 @@ class TaskRun:
     command: str = ""
     run_dir: str = ""
     actions_path: str = ""
+    events_path: str = ""
     screenshots_dir: str = ""
     extracted_path: str = ""
     trace_id: str = ""
@@ -317,6 +319,7 @@ class AgentApp:
         self.settings = settings
         self.engine = engine
         self.memory = engine.memory
+        self._apply_policy_pack()
         self.node_name = self.settings.node_name
         self.a2a_pause_path = os.path.join(self.settings.data_dir, "a2a_bridge_pause.json")
 
@@ -372,6 +375,7 @@ class AgentApp:
             self._start_vision_loop()
         if self._jarvis_enabled:
             self._start_jarvis_loop()
+        self._start_watchers()
 
 
         tool_prefixes = list(self.tools.tools.keys())
@@ -937,6 +941,21 @@ class AgentApp:
             trace_id=(extra or {}).get("trace_id") or trace_id,
         )
         log_audit(self.memory, "task_event", event.__dict__, redact=getattr(self, "redact_logs", False))
+        try:
+            if getattr(self, "current_run", None) and getattr(self.current_run, "events_path", ""):
+                with open(self.current_run.events_path, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event.__dict__) + "\n")
+        except Exception:
+            pass
+
+    def emit_ui_block(self, block: dict) -> None:
+        self._log_event("ui_block", {"ui": block})
+
+    def emit_ui_patch(self, patch: dict) -> None:
+        self._log_event("ui_patch", {"ui": patch})
+
+    def emit_trace_update(self, message: str, level: str = "info") -> None:
+        self._log_event("trace_update", {"message": message, "level": level})
         try:
             trace_id = (extra or {}).get("trace_id") or trace_id
             if trace_id:
@@ -1737,6 +1756,7 @@ class AgentApp:
         run.run_dir = base
         run.screenshots_dir = screenshots_dir
         run.actions_path = os.path.join(base, "actions.jsonl")
+        run.events_path = os.path.join(base, "events.jsonl")
         run.extracted_path = os.path.join(base, "extracted.txt")
         self._log_event("run_start", {"run_id": run.run_id, "intent": run.intent})
         self.memory.log_nondet_input(run.run_id, "time", datetime.utcnow().isoformat() + "Z")
@@ -2041,6 +2061,65 @@ class AgentApp:
 
         t = threading.Thread(target=_loop, daemon=True)
         t.start()
+
+    def _start_watchers(self) -> None:
+        watch_path = os.getenv("AGENTIC_WATCH_FILE", "")
+        if not watch_path or not os.path.exists(watch_path):
+            return
+        pattern = os.getenv("AGENTIC_WATCH_REGEX", "error|exception|traceback")
+        try:
+            regex = re.compile(pattern, flags=re.IGNORECASE)
+        except Exception:
+            regex = re.compile("error|exception|traceback", flags=re.IGNORECASE)
+
+        def _tail() -> None:
+            try:
+                with open(watch_path, "r", encoding="utf-8", errors="ignore") as handle:
+                    handle.seek(0, os.SEEK_END)
+                    while True:
+                        line = handle.readline()
+                        if not line:
+                            time.sleep(0.5)
+                            continue
+                        if regex.search(line):
+                            self._log_event(
+                                "ui_block",
+                                {"ui": {"type": "toast", "message": line.strip(), "level": "warning"}},
+                            )
+            except Exception:
+                return
+
+        threading.Thread(target=_tail, daemon=True).start()
+
+    def _apply_policy_pack(self) -> None:
+        policy_path = getattr(self.settings, "policy_path", "") or os.getenv("AGENTIC_POLICY_PATH", "")
+        if not policy_path:
+            return
+        try:
+            with open(policy_path, "r", encoding="utf-8") as handle:
+                policy = json.load(handle)
+        except Exception:
+            return
+        for key in ("allowed_paths", "allowed_domains", "autonomy_level", "demo_mode", "redact_logs"):
+            if key in policy and policy[key] is not None:
+                setattr(self.settings, key, str(policy[key]))
+        if "purpose" in policy:
+            self.settings.purpose = str(policy["purpose"])
+        if "max_tool_calls_per_task" in policy:
+            try:
+                self.settings.max_tool_calls_per_task = int(policy["max_tool_calls_per_task"])
+            except Exception:
+                pass
+        if "max_plan_steps" in policy:
+            try:
+                self.settings.max_plan_steps = int(policy["max_plan_steps"])
+            except Exception:
+                pass
+        if "event_retention_seconds" in policy:
+            try:
+                self.settings.event_retention_seconds = int(policy["event_retention_seconds"])
+            except Exception:
+                pass
         self._memory_prune_thread = t
 
 
@@ -2712,6 +2791,77 @@ class AgentApp:
             parts.append(f"Budget: {json.dumps(budget)}")
         return "\n".join(parts)
 
+    def _load_plan_schema_file(self, run_id: str) -> PlanSchema | None:
+        base = os.path.join(self.settings.data_dir, "runs", run_id, "plan.json")
+        if not os.path.exists(base):
+            return None
+        try:
+            data = json.load(open(base, "r", encoding="utf-8"))
+        except Exception:
+            return None
+        try:
+            steps = []
+            for s in data.get("steps") or []:
+                steps.append(
+                    PlanStepSchema(
+                        step_id=int(s.get("step_id") or 0),
+                        title=s.get("title") or "",
+                        intent=s.get("intent") or "",
+                        tool=s.get("tool") or "",
+                        args=s.get("args") or {},
+                        risk=s.get("risk") or "safe",
+                        requires_confirmation=bool(s.get("requires_confirmation") or False),
+                        max_attempts=int(s.get("max_attempts") or 2),
+                        timeout_s=int(s.get("timeout_s") or 90),
+                        success_check=s.get("success_check") or "",
+                    )
+                )
+            return PlanSchema(
+                run_id=data.get("run_id") or run_id,
+                trace_id=data.get("trace_id") or "",
+                goal=data.get("goal") or "",
+                success_criteria=data.get("success_criteria") or [],
+                steps=steps,
+                assumptions=data.get("assumptions") or [],
+                constraints=data.get("constraints") or {},
+                budget=Budget(**(data.get("budget") or {})),
+                created_at=float(data.get("created_at") or 0.0),
+                model=data.get("model") or "",
+            )
+        except Exception:
+            return None
+
+    def _load_report_file(self, run_id: str) -> ExecutionReport | None:
+        path = os.path.join(self.settings.data_dir, "runs", run_id, "report.json")
+        if not os.path.exists(path):
+            return None
+        try:
+            data = json.load(open(path, "r", encoding="utf-8"))
+        except Exception:
+            return None
+        try:
+            steps = []
+            for s in data.get("steps") or []:
+                step = StepReport(step_id=int(s.get("step_id") or 0), title=s.get("title") or "", status=s.get("status") or "running")
+                steps.append(step)
+            return ExecutionReport(
+                run_id=data.get("run_id") or run_id,
+                trace_id=data.get("trace_id") or "",
+                goal=data.get("goal") or "",
+                status=data.get("status") or "running",
+                started_at=float(data.get("started_at") or 0.0),
+                ended_at=float(data.get("ended_at") or 0.0),
+                steps=steps,
+                files_changed=data.get("files_changed") or [],
+                tests_run=data.get("tests_run") or [],
+                cost=data.get("cost") or {},
+                confidence=float(data.get("confidence") or 0.0),
+                next_actions=data.get("next_actions") or [],
+                failure_reason=data.get("failure_reason") or "",
+            )
+        except Exception:
+            return None
+
     def _execute_tool(self, name: str, args: str, confirm: bool = False, dry_run: bool = False):
 
         if not hasattr(self, "_tool_calls_this_task"):
@@ -2862,6 +3012,80 @@ class AgentApp:
             goal = parts[1].strip() if len(parts) > 1 else ""
             out = self.workflow_use.run(wf, goal=goal)
             self.log_line(out)
+            return
+
+        if lowered.startswith("resume "):
+            run_id = step[len("resume "):].strip()
+            if not run_id:
+                raise RuntimeError("resume requires: resume <run_id>")
+            plan = self._load_plan_schema_file(run_id)
+            if not plan:
+                raise RuntimeError("resume failed: plan.json not found")
+            report = self._load_report_file(run_id)
+            state_path = os.path.join(self.settings.data_dir, "runs", run_id, "state.json")
+            start_step = None
+            try:
+                if os.path.exists(state_path):
+                    state = json.load(open(state_path, "r", encoding="utf-8"))
+                    cur = state.get("current_step")
+                    if cur:
+                        start_step = int(cur) + 1
+            except Exception:
+                start_step = None
+            if getattr(self, "current_run", None):
+                self.current_run.plan_schema = plan
+                self.current_run.report = report
+            resumed = self._run_plan_schema(plan, report=report, start_step_id=start_step)
+            if getattr(self, "current_run", None):
+                self.current_run.report = resumed
+            self.log_line(f"Resumed {run_id}: {resumed.status}")
+            return
+
+        if lowered.startswith("cancel "):
+            run_id = step[len("cancel "):].strip()
+            if not run_id:
+                raise RuntimeError("cancel requires: cancel <run_id>")
+            if getattr(self, "current_run", None) and self.current_run.run_id == run_id:
+                self._set_run_status(self.current_run, OrchestratorState.STOPPED.value)
+            self.log_line(f"Cancelled {run_id}")
+            return
+
+        if lowered.startswith("replay "):
+            run_id = step[len("replay "):].strip()
+            if not run_id:
+                raise RuntimeError("replay requires: replay <run_id>")
+            events_path = os.path.join(self.settings.data_dir, "runs", run_id, "events.jsonl")
+            if not os.path.exists(events_path):
+                raise RuntimeError("replay failed: events.jsonl not found")
+            dry_run = os.getenv("AGENTIC_REPLAY_DRY_RUN", "true").lower() in ("1", "true", "yes", "on")
+            with open(events_path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    if event.get("event_type") == "tool_call_started":
+                        payload = event.get("payload") or {}
+                        tool = payload.get("tool")
+                        args = payload.get("args")
+                        if tool:
+                            try:
+                                self._execute_tool(tool, json.dumps(args) if isinstance(args, dict) else str(args), dry_run=dry_run)
+                            except Exception:
+                                continue
+            self.log_line(f"Replay complete for {run_id}")
+            return
+
+        if lowered.startswith("submit_form "):
+            payload = step[len("submit_form "):].strip()
+            if not payload:
+                raise RuntimeError("submit_form requires json payload")
+            try:
+                data = json.loads(payload)
+            except Exception:
+                raise RuntimeError("submit_form payload must be json")
+            self.memory.set("last_form", json.dumps(data))
+            self.log_line("Form submitted.")
             return
 
         if lowered == "rag_sources":
@@ -3234,17 +3458,13 @@ class AgentApp:
         if lowered.startswith("team "):
             task = step[len("team "):].strip()
             roles = [
-
-                AgentRole("Planner", "Create a brief plan."),
-
-                AgentRole("Builder", "Execute the plan or draft the solution."),
-
-                AgentRole("Reviewer", "Review for issues and improvements."),
-
+                AgentRole("Planner", "Create a brief plan.", allowed_tools=["plan", "analyze"]),
+                AgentRole("Builder", "Execute the plan or draft the solution.", allowed_tools=["shell", "files", "computer"]),
+                AgentRole("Reviewer", "Review for issues and improvements.", allowed_tools=["analyze"]),
             ]
-
+            for role in roles:
+                self._log_event("agent_handoff", {"role": role.name, "tools": role.allowed_tools})
             output = self.team.run(roles, task)
-
             self.log_line(output)
             return
 
@@ -4180,12 +4400,14 @@ class AgentApp:
             if lowered.startswith("agent_team "):
                 task = cmd.split(" ", 1)[1].strip()
                 roles = [
-                    AgentRole("Planner", "Create a brief plan."),
-                    AgentRole("Builder", "Execute the plan or draft the solution."),
-                    AgentRole("Reviewer", "Review for issues and improvements."),
-                    AgentRole("Security", "Check for security risks or dual-use concerns."),
-                    AgentRole("QA", "Validate correctness and edge cases."),
+                    AgentRole("Planner", "Create a brief plan.", allowed_tools=["plan", "analyze"]),
+                    AgentRole("Builder", "Execute the plan or draft the solution.", allowed_tools=["shell", "files", "computer"]),
+                    AgentRole("Reviewer", "Review for issues and improvements.", allowed_tools=["analyze"]),
+                    AgentRole("Security", "Check for security risks or dual-use concerns.", allowed_tools=["analyze"]),
+                    AgentRole("QA", "Validate correctness and edge cases.", allowed_tools=["analyze"]),
                 ]
+                for role in roles:
+                    self._log_event("agent_handoff", {"role": role.name, "tools": role.allowed_tools})
                 output = self.team.run(roles, task)
                 self.log_line(output)
                 return
