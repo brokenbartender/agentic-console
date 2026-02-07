@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from multimodal import capture_screenshot
-from ui_automation import write_snapshot
+from ui_automation import write_snapshot, snapshot_uia
 try:
     import pyautogui
 except Exception:
@@ -77,6 +77,12 @@ class ComputerController:
             x = params.get("x")
             y = params.get("y")
             if x is None or y is None:
+                uia_query = params.get("uia_query") or {}
+                if uia_query:
+                    coords = self._resolve_uia_query(uia_query)
+                    if coords:
+                        x, y = coords
+            if x is None or y is None:
                 raise RuntimeError("computer.click desktop requires x,y")
             pyautogui.click(x, y)
             return f"clicked at {x},{y}"
@@ -84,12 +90,24 @@ class ComputerController:
             x = params.get("x")
             y = params.get("y")
             if x is None or y is None:
+                uia_query = params.get("uia_query") or {}
+                if uia_query:
+                    coords = self._resolve_uia_query(uia_query)
+                    if coords:
+                        x, y = coords
+            if x is None or y is None:
                 raise RuntimeError("computer.double_click desktop requires x,y")
             pyautogui.doubleClick(x, y)
             return f"double clicked at {x},{y}"
         if action == "right_click":
             x = params.get("x")
             y = params.get("y")
+            if x is None or y is None:
+                uia_query = params.get("uia_query") or {}
+                if uia_query:
+                    coords = self._resolve_uia_query(uia_query)
+                    if coords:
+                        x, y = coords
             if x is None or y is None:
                 raise RuntimeError("computer.right_click desktop requires x,y")
             pyautogui.rightClick(x, y)
@@ -139,6 +157,28 @@ class ComputerController:
             self.app._execute_tool("open", path)
             return f"opened {path}"
         raise RuntimeError(f"computer.act unsupported browser action: {action}")
+
+    def _resolve_uia_query(self, query: Dict[str, Any]) -> Optional[tuple[int, int]]:
+        name = (query.get("name") or query.get("title") or "").strip().lower()
+        role = (query.get("role") or "").strip().lower()
+        try:
+            nodes = snapshot_uia(limit=500)
+        except Exception:
+            return None
+        for node in nodes:
+            if role and node.get("type") != role and node.get("type") != "window":
+                continue
+            title = (node.get("title") or "").strip().lower()
+            if name and name not in title:
+                continue
+            x = node.get("x")
+            y = node.get("y")
+            w = node.get("w")
+            h = node.get("h")
+            if x is None or y is None or w is None or h is None:
+                continue
+            return (int(x + w / 2), int(y + h / 2))
+        return None
 
     def act(self, action: str, params: Dict[str, Any]) -> str:
         backend = (params.get("backend") or "browser").strip().lower()

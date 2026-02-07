@@ -343,6 +343,7 @@ class AgentApp:
         self.chat_history = []
 
         self.tools = ToolRegistry(self)
+        self.ui_blocks: list = []
 
         self.rag = engine.rag
         self.graph = engine.graph
@@ -612,10 +613,12 @@ class AgentApp:
         a2a_tab = ttk.Frame(self.left_notebook)
         terminal_tab = ttk.Frame(self.left_notebook)
         canvas_tab = ttk.Frame(self.left_notebook)
+        ui_tab = ttk.Frame(self.left_notebook)
         self.left_notebook.add(console_tab, text="Console")
         self.left_notebook.add(a2a_tab, text="A2A Control")
         self.left_notebook.add(terminal_tab, text="Terminal")
         self.left_notebook.add(canvas_tab, text="Canvas")
+        self.left_notebook.add(ui_tab, text="UI Blocks")
 
         self.log = tk.Text(console_tab, wrap=tk.WORD)
         self.log.pack(fill=tk.BOTH, expand=True)
@@ -625,6 +628,7 @@ class AgentApp:
         self._build_a2a_tab(a2a_tab)
         self._build_terminal_tab(terminal_tab)
         self._build_canvas_tab(canvas_tab)
+        self._build_ui_blocks_tab(ui_tab)
 
         ttk.Label(right, text="Plan (Intent → Plan → Proof)").pack(anchor="w")
         self.plan_text = tk.Text(right, height=10, wrap=tk.WORD)
@@ -842,6 +846,53 @@ class AgentApp:
             self.log_line(f"Canvas saved: {path}")
         except Exception as exc:
             self.log_line(f"Canvas save failed: {exc}")
+
+    def _build_ui_blocks_tab(self, parent) -> None:
+        self.ui_list = tk.Listbox(parent)
+        self.ui_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.ui_detail = ttk.Frame(parent)
+        self.ui_detail.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.ui_list.bind("<<ListboxSelect>>", lambda _e: self._render_ui_block_detail())
+
+    def _render_ui_blocks_tab(self) -> None:
+        if not hasattr(self, "ui_list"):
+            return
+        self.ui_list.delete(0, tk.END)
+        for idx, block in enumerate(self.ui_blocks):
+            label = block.get("type", "ui")
+            self.ui_list.insert(tk.END, f"{idx}: {label}")
+
+    def _render_ui_block_detail(self) -> None:
+        for widget in self.ui_detail.winfo_children():
+            widget.destroy()
+        sel = self.ui_list.curselection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if idx >= len(self.ui_blocks):
+            return
+        block = self.ui_blocks[idx]
+        ttk.Label(self.ui_detail, text=f"Type: {block.get('type')}").pack(anchor="w")
+        if block.get("type") == "form":
+            fields = block.get("fields") or []
+            entries = {}
+            for f in fields:
+                key = f.get("key") or f.get("name") or ""
+                if not key:
+                    continue
+                ttk.Label(self.ui_detail, text=key).pack(anchor="w")
+                var = tk.StringVar()
+                entry = ttk.Entry(self.ui_detail, textvariable=var)
+                entry.pack(fill=tk.X, padx=2, pady=2)
+                entries[key] = var
+            def _submit():
+                data = {k: v.get() for k, v in entries.items()}
+                self._orchestrate("submit_form " + json.dumps(data))
+            ttk.Button(self.ui_detail, text="Submit", command=_submit).pack(pady=4)
+        if block.get("type") == "approval":
+            ttk.Button(self.ui_detail, text="Approve Once", command=lambda: self._orchestrate("approve_once")).pack(pady=2)
+            ttk.Button(self.ui_detail, text="Always Allow", command=lambda: self._orchestrate("approve_always")).pack(pady=2)
+            ttk.Button(self.ui_detail, text="Never Allow", command=lambda: self._orchestrate("approve_never")).pack(pady=2)
         self._terminal_maybe_autorun()
 
     def _terminal_clear(self) -> None:
@@ -1018,6 +1069,13 @@ class AgentApp:
                 self.otel.log_event(trace_id, event_type, data)
         except Exception:
             pass
+        if event_type == "ui_block" and isinstance(payload, dict):
+            try:
+                block = payload.get("ui") or {}
+                self.ui_blocks.append(block)
+                self._render_ui_blocks_tab()
+            except Exception:
+                pass
 
     def log_line(self, message):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -2702,6 +2760,8 @@ class AgentApp:
             if max_cost and est_cost > max_cost:
                 self._log_event("tool_call_blocked", {"tool": "cost_estimate", "args": report.cost})
                 self.memory.set("pending_action", json.dumps({"type": "cost", "name": "plan_cost", "args": report.cost}))
+                self.memory.set("pending_step_id", "1")
+                self.memory.set("pending_plan_run_id", plan.run_id)
                 report.status = "needs_input"
                 report.failure_reason = "cost_threshold_exceeded"
                 return report
@@ -2816,9 +2876,36 @@ class AgentApp:
                     except Exception:
                         pass
                 if tr.ok and step.success_check:
-                    if step.success_check.lower() not in (tr.output_preview or "").lower():
-                        tr.ok = False
-                        tr.error = f"success_check_failed: {step.success_check}"
+                    if isinstance(step.success_check, dict):
+                        sc = step.success_check
+                        sc_type = sc.get("type")
+                        if sc_type == "uia_contains":
+                            target = (sc.get("name") or "").lower()
+                            try:
+                                nodes = snapshot_uia(limit=500)
+                            except Exception:
+                                nodes = []
+                            found = any(target in (n.get("title") or "").lower() for n in nodes)
+                            if not found:
+                                tr.ok = False
+                                tr.error = f"success_check_failed: {step.success_check}"
+                        elif sc_type == "window_title":
+                            target = (sc.get("value") or "").lower()
+                            try:
+                                nodes = snapshot_uia(limit=200)
+                            except Exception:
+                                nodes = []
+                            found = any(target in (n.get("title") or "").lower() for n in nodes)
+                            if not found:
+                                tr.ok = False
+                                tr.error = f"success_check_failed: {step.success_check}"
+                        else:
+                            tr.ok = False
+                            tr.error = f"success_check_failed: {step.success_check}"
+                    else:
+                        if str(step.success_check).lower() not in (tr.output_preview or "").lower():
+                            tr.ok = False
+                            tr.error = f"success_check_failed: {step.success_check}"
                 self._log_event(
                     "tool_call_finished",
                     {"tool": tr.name, "ok": tr.ok, "output_preview": tr.output_preview, "error": tr.error},
@@ -4034,6 +4121,18 @@ class AgentApp:
                 return out
 
             if payload.get("type") == "cost":
+                try:
+                    pending_step = self.memory.get("pending_step_id")
+                    pending_run = self.memory.get("pending_plan_run_id")
+                    if pending_step and pending_run and getattr(self, "current_run", None):
+                        if self.current_run.run_id == pending_run and getattr(self.current_run, "plan_schema", None):
+                            start_step = int(pending_step)
+                            self.memory.set("pending_step_id", "")
+                            self.memory.set("pending_plan_run_id", "")
+                            report = self._run_plan_schema(self.current_run.plan_schema, report=self.current_run.report, start_step_id=start_step)
+                            self.current_run.report = report
+                except Exception:
+                    pass
                 return "Cost approved."
 
             return "Nothing to confirm."
