@@ -836,6 +836,10 @@ class MemoryStore:
         step_id: int | None = None,
         tool_call_id: str | None = None,
     ) -> None:
+        if user_id is None:
+            user_id = os.getenv("AGENTIC_USER_ID", "default")
+        if project_id is None:
+            project_id = os.getenv("AGENTIC_PROJECT_ID", "")
         if scope not in self._allowed_scopes:
             raise ValueError(f"Invalid memory scope: {scope}")
         if status not in self._allowed_statuses:
@@ -919,6 +923,17 @@ class MemoryStore:
                 emb = json.loads(emb_json)
             except Exception:
                 continue
+            # ACL filter
+            try:
+                cur.execute("SELECT acl FROM memories WHERE id=?", (memory_id,))
+                acl_blob = cur.fetchone()
+                if acl_blob and acl_blob[0]:
+                    acl = json.loads(acl_blob[0])
+                    users = acl.get("users") or []
+                    if user_id and users and user_id not in users:
+                        continue
+            except Exception:
+                pass
             if exclude_failed_runs and failed_runs:
                 try:
                     cur.execute("SELECT run_id FROM memory_refs WHERE memory_id=?", (memory_id,))

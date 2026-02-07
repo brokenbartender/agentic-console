@@ -12,6 +12,7 @@ from datetime import datetime
 import socket
 
 import json
+import shutil
 
 import time
 
@@ -692,6 +693,9 @@ class AgentApp:
         self.root.after(1000, self._a2a_refresh)
 
     def _run_shell_async(self, cmd: str) -> None:
+        if not self._shell_allowed(cmd):
+            self.log_line("Shell command blocked by allowlist.")
+            return
         def _worker():
             try:
                 subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
@@ -859,6 +863,9 @@ class AgentApp:
         cmd = (self.term_input_var.get() or "").strip()
         if not cmd:
             return
+        if not self._shell_allowed(cmd):
+            self._terminal_queue.put("[terminal] blocked by allowlist.\n")
+            return
         self.term_input_var.set("")
         if getattr(self, "_terminal_process", None):
             self._terminal_queue.put("\n[terminal] process already running. Kill it first.\n")
@@ -886,6 +893,14 @@ class AgentApp:
                 self.term_status_var.set("idle")
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _shell_allowed(self, cmd: str) -> bool:
+        allow = os.getenv("AGENTIC_ALLOWED_SHELL", "")
+        if not allow:
+            return True
+        allowed = [a.strip().lower() for a in allow.split(",") if a.strip()]
+        lowered = (cmd or "").strip().lower()
+        return any(lowered.startswith(a) for a in allowed)
 
     def _terminal_pump(self) -> None:
         try:
@@ -2434,6 +2449,7 @@ class AgentApp:
         return steps
 
     def _plan_with_llm(self, instruction: str) -> PlanSchema | None:
+        instruction = self._resolve_entities(instruction)
         tools = self._tool_catalog()
         if not tools:
             return None
@@ -2447,6 +2463,19 @@ class AgentApp:
             raw = self._agent_chat(prompt + "\nUser goal: " + instruction) or ""
         except Exception:
             return None
+
+    def _resolve_entities(self, text: str) -> str:
+        try:
+            blob = self.memory.get("entity_aliases") or "{}"
+            data = json.loads(blob)
+        except Exception:
+            data = {}
+        if not data:
+            return text
+        out = text
+        for alias, canonical in data.items():
+            out = re.sub(rf"\\b{re.escape(alias)}\\b", canonical, out, flags=re.IGNORECASE)
+        return out
         if not raw:
             return None
         data = None
@@ -2802,6 +2831,22 @@ class AgentApp:
             if ok:
                 step_rep.verification_passed = True
                 step_rep.verification_evidence = "ok"
+                if step.tool in ("copy", "move") and isinstance(step.args, dict):
+                    raw = step.args.get("raw", "")
+                    if "|" in raw:
+                        dest = raw.split("|", 1)[1].strip()
+                        if dest and not os.path.exists(dest):
+                            step_rep.verification_passed = False
+                            step_rep.verification_evidence = "dest_missing"
+                            ok = False
+                if step.tool == "delete" and isinstance(step.args, dict):
+                    raw = step.args.get("raw", "").strip()
+                    if raw and os.path.exists(raw):
+                        step_rep.verification_passed = False
+                        step_rep.verification_evidence = "delete_failed"
+                        ok = False
+                if not ok:
+                    step_rep.status = "failed"
             self._log_event("step_finished", {"status": step_rep.status}, extra={"step_id": step.step_id})
             if step_rep.status == "failed":
                 self._current_step_id = None
@@ -3128,6 +3173,39 @@ class AgentApp:
             name, args = payload.split(" ", 1)
             out = self._execute_tool(name.strip(), args.strip(), dry_run=True)
             self.log_line(out)
+            return
+
+        if lowered.startswith("alias_add "):
+            raw = step[len("alias_add "):].strip()
+            if "|" not in raw:
+                raise RuntimeError("alias_add requires: alias_add alias | canonical")
+            alias, canonical = [s.strip() for s in raw.split("|", 1)]
+            try:
+                blob = self.memory.get("entity_aliases") or "{}"
+                data = json.loads(blob)
+            except Exception:
+                data = {}
+            data[alias.lower()] = canonical
+            self.memory.set("entity_aliases", json.dumps(data))
+            self.log_line(f"Alias added: {alias} -> {canonical}")
+            return
+
+        if lowered.startswith("alias_list"):
+            blob = self.memory.get("entity_aliases") or "{}"
+            self.log_line(blob)
+            return
+
+        if lowered.startswith("fork "):
+            run_id = step[len("fork "):].strip()
+            if not run_id:
+                raise RuntimeError("fork requires: fork <run_id>")
+            src = os.path.join(self.settings.data_dir, "runs", run_id)
+            if not os.path.isdir(src):
+                raise RuntimeError("fork failed: run not found")
+            new_id = datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+            dst = os.path.join(self.settings.data_dir, "runs", new_id)
+            shutil.copytree(src, dst)
+            self.log_line(f"Forked run {run_id} -> {new_id}")
             return
 
         if lowered.startswith("uia_snapshot"):

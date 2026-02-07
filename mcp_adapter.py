@@ -27,6 +27,11 @@ class MCPAdapter:
         return {"providers": sorted(names)}
 
     def call(self, name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        allow = os.getenv("AGENTIC_ALLOWED_MCP", "")
+        if allow:
+            allowed = [a.strip().lower() for a in allow.split(",") if a.strip()]
+            if name.lower() not in allowed:
+                raise RuntimeError("MCP provider blocked by allowlist")
         if name in self.providers:
             return self.providers[name](payload)
         if name in self.remote_endpoints and self.remote_endpoints[name]:
