@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import List
 
@@ -37,7 +38,8 @@ class RetrieverAgent:
         self.memory = memory
 
     def retrieve(self, query: str, limit: int = 5) -> str:
-        results = self.memory.search_memory(query, limit=limit)
+        user_id = os.getenv("AGENTIC_USER_ID", "default")
+        results = self.memory.search_memory(query, limit=limit, user_id=user_id)
         if not results:
             return ""
         lines = []

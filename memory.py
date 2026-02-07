@@ -7,7 +7,7 @@ import json
 import math
 import hashlib
 import re
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from privacy import redact_text, contains_sensitive
 
 
@@ -101,6 +101,12 @@ class MemoryStore:
                 created_at REAL NOT NULL,
                 expires_at REAL,
                 tags TEXT,
+                source TEXT,
+                confidence REAL,
+                relevance REAL,
+                user_id TEXT,
+                project_id TEXT,
+                acl TEXT,
                 scope TEXT DEFAULT 'shared',
                 status TEXT DEFAULT 'active',
                 quarantine_reason TEXT
@@ -298,6 +304,18 @@ class MemoryStore:
             cur.execute("ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'")
         if "quarantine_reason" not in cols:
             cur.execute("ALTER TABLE memories ADD COLUMN quarantine_reason TEXT")
+        if "source" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN source TEXT")
+        if "confidence" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN confidence REAL")
+        if "relevance" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN relevance REAL")
+        if "user_id" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN user_id TEXT")
+        if "project_id" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN project_id TEXT")
+        if "acl" not in cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN acl TEXT")
         self._conn.commit()
 
     def _ensure_indexes(self) -> None:
@@ -806,6 +824,12 @@ class MemoryStore:
         tags: Optional[List[str]] = None,
         ttl_seconds: Optional[int] = None,
         scope: str = "shared",
+        source: str = "inference",
+        confidence: float = 0.5,
+        relevance: float = 0.5,
+        user_id: str | None = None,
+        project_id: str | None = None,
+        acl: Optional[Dict[str, Any]] = None,
         status: str = "active",
         quarantine_reason: str | None = None,
         run_id: str | None = None,
@@ -823,10 +847,11 @@ class MemoryStore:
         payload = json.dumps(embedding)
         tags_blob = json.dumps(tags or [])
         cur = self._conn.cursor()
+        acl_blob = json.dumps(acl or {})
         cur.execute(
-            "INSERT INTO memories (kind, content, embedding, created_at, expires_at, tags, scope, status, quarantine_reason) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (kind, content, payload, time.time(), expires_at, tags_blob, scope, status, quarantine_reason),
+            "INSERT INTO memories (kind, content, embedding, created_at, expires_at, tags, source, confidence, relevance, user_id, project_id, acl, scope, status, quarantine_reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, content, payload, time.time(), expires_at, tags_blob, source, confidence, relevance, user_id, project_id, acl_blob, scope, status, quarantine_reason),
         )
         memory_id = cur.lastrowid
         if run_id or step_id or tool_call_id:
@@ -851,6 +876,10 @@ class MemoryStore:
         limit: int = 5,
         scope: str = "shared",
         include_quarantined: bool = False,
+        min_confidence: float = 0.2,
+        user_id: str | None = None,
+        project_id: str | None = None,
+        exclude_failed_runs: bool = True,
     ) -> List[Dict[str, str]]:
         if scope not in self._allowed_scopes and scope != "all":
             raise ValueError(f"Invalid memory scope: {scope}")
@@ -865,15 +894,39 @@ class MemoryStore:
         if scope != "all":
             clauses.append("scope = ?")
             params.append(scope)
+        if min_confidence is not None:
+            clauses.append("(confidence IS NULL OR confidence >= ?)")
+            params.append(min_confidence)
+        if user_id:
+            clauses.append("(user_id IS NULL OR user_id = ?)")
+            params.append(user_id)
+        if project_id:
+            clauses.append("(project_id IS NULL OR project_id = ?)")
+            params.append(project_id)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        cur.execute(f"SELECT kind, content, embedding, created_at, tags FROM memories {where}", params)
+        cur.execute(f"SELECT id, kind, content, embedding, created_at, tags FROM memories {where}", params)
         rows = cur.fetchall()
+        failed_runs = set()
+        if exclude_failed_runs:
+            try:
+                cur.execute("SELECT run_id FROM task_runs WHERE status IN ('error','failed','stopped')")
+                failed_runs = {row[0] for row in cur.fetchall() if row[0]}
+            except Exception:
+                failed_runs = set()
         scored = []
-        for kind, content, emb_json, created_at, tags_blob in rows:
+        for memory_id, kind, content, emb_json, created_at, tags_blob in rows:
             try:
                 emb = json.loads(emb_json)
             except Exception:
                 continue
+            if exclude_failed_runs and failed_runs:
+                try:
+                    cur.execute("SELECT run_id FROM memory_refs WHERE memory_id=?", (memory_id,))
+                    refs = [row[0] for row in cur.fetchall() if row[0]]
+                    if any(r in failed_runs for r in refs):
+                        continue
+                except Exception:
+                    pass
             score = _cosine(qvec, emb)
             if score <= 0:
                 continue

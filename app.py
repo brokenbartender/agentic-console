@@ -962,6 +962,8 @@ class AgentApp:
             "purpose": getattr(self, "purpose", "") or "",
             "autonomy": getattr(self, "autonomy_level", ""),
         }
+        data["actor"] = f"agent:{getattr(self, 'node_name', 'agent')}"
+        data["requester"] = f"user:{os.getenv('AGENTIC_USER_ID', 'default')}"
         if extra:
             data.update(extra)
         run_id = ""
@@ -2102,7 +2104,7 @@ class AgentApp:
     def _start_watchers(self) -> None:
         watch_path = os.getenv("AGENTIC_WATCH_FILE", "")
         if not watch_path or not os.path.exists(watch_path):
-            return
+            pass
         pattern = os.getenv("AGENTIC_WATCH_REGEX", "error|exception|traceback")
         try:
             regex = re.compile(pattern, flags=re.IGNORECASE)
@@ -2127,6 +2129,29 @@ class AgentApp:
                 return
 
         threading.Thread(target=_tail, daemon=True).start()
+
+        sched_raw = os.getenv("AGENTIC_SCHEDULE_JSON", "")
+        if sched_raw:
+            try:
+                sched = json.loads(sched_raw)
+            except Exception:
+                sched = []
+            for item in sched:
+                try:
+                    interval = int(item.get("interval_s") or 60)
+                    command = item.get("command") or ""
+                    if not command:
+                        continue
+                    def _loop(cmd=command, wait=interval):
+                        while True:
+                            try:
+                                self._orchestrate(cmd)
+                            except Exception:
+                                pass
+                            time.sleep(max(5, wait))
+                    threading.Thread(target=_loop, daemon=True).start()
+                except Exception:
+                    continue
 
     def _apply_policy_pack(self) -> None:
         policy_path = getattr(self.settings, "policy_path", "") or os.getenv("AGENTIC_POLICY_PATH", "")
@@ -2456,15 +2481,17 @@ class AgentApp:
                         success_check=s.get("success_check") or "",
                     )
                 )
-            if not steps:
+            if not steps and not data.get("needs_user_input"):
                 return None
             budget = data.get("budget") or {}
-            return PlanSchema(
+            plan = PlanSchema(
                 run_id=data.get("run_id") or datetime.utcnow().strftime("%Y-%m-%d_%H%M%S"),
                 trace_id=data.get("trace_id") or str(uuid.uuid4()),
                 goal=data.get("goal") or instruction,
                 success_criteria=data.get("success_criteria") or ["Task completed without errors"],
                 steps=steps,
+                needs_user_input=bool(data.get("needs_user_input") or False),
+                questions=data.get("questions") or [],
                 assumptions=data.get("assumptions") or [],
                 constraints=data.get("constraints") or {},
                 budget=Budget(
@@ -2475,8 +2502,23 @@ class AgentApp:
                 created_at=time.time(),
                 model=data.get("model") or "",
             )
+            return self._validate_plan_schema(plan)
         except Exception:
             return None
+
+    def _validate_plan_schema(self, plan: PlanSchema) -> PlanSchema | None:
+        if not plan.goal:
+            return None
+        if plan.needs_user_input:
+            return plan
+        if not plan.steps:
+            return None
+        for step in plan.steps:
+            if not step.tool:
+                step.tool = "agent"
+            if step.tool != "agent" and step.tool not in self.tools.tools:
+                step.tool = "agent"
+        return plan
 
     def _execute_step_schema(self, step: PlanStepSchema) -> ToolResult:
         t0 = time.time()
@@ -2500,12 +2542,45 @@ class AgentApp:
                         payload = dict(step.args)
                 if "mode" not in payload:
                     payload["mode"] = "act"
-                params = payload.get("params") or {}
-                if "backend" not in params:
-                    params["backend"] = self._get_computer_backend(step.args if isinstance(step.args, dict) else {})
-                payload["params"] = params
-                out = self._execute_tool("computer", json.dumps(payload)) or ""
-                ok = True
+                if payload.get("primary") or payload.get("fallbacks"):
+                    attempts = []
+                    primary = payload.get("primary") or {}
+                    if primary:
+                        attempts.append(primary)
+                    for fb in payload.get("fallbacks") or []:
+                        attempts.append(fb)
+                    last_err = ""
+                    for candidate in attempts:
+                        action = candidate.get("action") or payload.get("action") or "click"
+                        params = dict(payload.get("params") or {})
+                        params.update(candidate)
+                        if "text" in candidate and "selector" not in candidate:
+                            params["selector"] = f"text={candidate.get('text')}"
+                        if "coords" in candidate and "x" not in params and "y" not in params:
+                            try:
+                                params["x"], params["y"] = candidate.get("coords")
+                                params["backend"] = "desktop"
+                            except Exception:
+                                pass
+                        if "backend" not in params:
+                            params["backend"] = self._get_computer_backend(step.args if isinstance(step.args, dict) else {})
+                        act_payload = {"mode": "act", "action": action, "params": params}
+                        try:
+                            out = self._execute_tool("computer", json.dumps(act_payload)) or ""
+                            ok = True
+                            break
+                        except Exception as exc:
+                            last_err = str(exc)
+                            ok = False
+                    if not ok:
+                        err = last_err
+                else:
+                    params = payload.get("params") or {}
+                    if "backend" not in params:
+                        params["backend"] = self._get_computer_backend(step.args if isinstance(step.args, dict) else {})
+                    payload["params"] = params
+                    out = self._execute_tool("computer", json.dumps(payload)) or ""
+                    ok = True
             else:
                 raw = step.args.get("raw", "")
                 out = self._execute_tool(step.tool, raw) or ""
@@ -2585,6 +2660,32 @@ class AgentApp:
         else:
             report.status = "running"
         self._log_event("run_started", {"goal": plan.goal})
+        try:
+            est_tokens = estimate_tokens(plan.goal + json.dumps([s.__dict__ for s in plan.steps]))
+            est_cost = estimate_cost(
+                est_tokens,
+                max(1, int(est_tokens * 0.3)),
+                self.settings.openai_cost_input_per_million,
+                self.settings.openai_cost_output_per_million,
+            )
+            report.cost = {"estimated_cost": est_cost, "estimated_tokens": est_tokens}
+            max_cost = float(os.getenv("AGENTIC_MAX_PLAN_COST", "0") or 0)
+            if max_cost and est_cost > max_cost:
+                self._log_event("tool_call_blocked", {"tool": "cost_estimate", "args": report.cost})
+                self.memory.set("pending_action", json.dumps({"type": "cost", "name": "plan_cost", "args": report.cost}))
+                report.status = "needs_input"
+                report.failure_reason = "cost_threshold_exceeded"
+                return report
+        except Exception:
+            pass
+        if plan.needs_user_input:
+            self._log_event(
+                "ui_block",
+                {"ui": {"type": "form", "title": "More info needed", "fields": plan.questions}},
+            )
+            report.status = "needs_input"
+            report.failure_reason = "needs_user_input"
+            return report
         tool_calls = 0
         started = time.time()
         for step in plan.steps:
@@ -2698,6 +2799,9 @@ class AgentApp:
                     ok = True
                     break
             step_rep.status = "succeeded" if ok else "failed"
+            if ok:
+                step_rep.verification_passed = True
+                step_rep.verification_evidence = "ok"
             self._log_event("step_finished", {"status": step_rep.status}, extra={"step_id": step.step_id})
             if step_rep.status == "failed":
                 self._current_step_id = None
@@ -2859,6 +2963,8 @@ class AgentApp:
                 goal=data.get("goal") or "",
                 success_criteria=data.get("success_criteria") or [],
                 steps=steps,
+                needs_user_input=bool(data.get("needs_user_input") or False),
+                questions=data.get("questions") or [],
                 assumptions=data.get("assumptions") or [],
                 constraints=data.get("constraints") or {},
                 budget=Budget(**(data.get("budget") or {})),
@@ -2879,7 +2985,13 @@ class AgentApp:
         try:
             steps = []
             for s in data.get("steps") or []:
-                step = StepReport(step_id=int(s.get("step_id") or 0), title=s.get("title") or "", status=s.get("status") or "running")
+                step = StepReport(
+                    step_id=int(s.get("step_id") or 0),
+                    title=s.get("title") or "",
+                    status=s.get("status") or "running",
+                    verification_passed=bool(s.get("verification_passed") or False),
+                    verification_evidence=s.get("verification_evidence") or "",
+                )
                 steps.append(step)
             return ExecutionReport(
                 run_id=data.get("run_id") or run_id,
@@ -2983,6 +3095,14 @@ class AgentApp:
             self.workflow.record_step(step, "run")
         except Exception:
             pass
+
+        if "pip install" in lowered or "python -m pip install" in lowered:
+            allow = os.getenv("AGENTIC_ALLOWED_PIP", "")
+            allowed = [p.strip().lower() for p in allow.split(",") if p.strip()]
+            if allowed:
+                ok = any(pkg in lowered for pkg in allowed)
+                if not ok:
+                    raise RuntimeError("pip install blocked by allowlist")
 
         if os.getenv("AGENTIC_DEBATE", "false").lower() in ("1", "true", "yes", "on"):
             risky = any(k in lowered for k in ("delete", "drop", "format", "rm ", "wipe", "destroy"))
@@ -3834,6 +3954,9 @@ class AgentApp:
                     pass
 
                 return out
+
+            if payload.get("type") == "cost":
+                return "Cost approved."
 
             return "Nothing to confirm."
 

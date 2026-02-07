@@ -38,6 +38,8 @@ class PlanSchema:
     goal: str
     success_criteria: List[str]
     steps: List[PlanStepSchema]
+    needs_user_input: bool = False
+    questions: List[Dict[str, Any]] = field(default_factory=list)
     assumptions: List[str] = field(default_factory=list)
     constraints: Dict[str, Any] = field(default_factory=dict)
     budget: Budget = field(default_factory=Budget)
@@ -68,6 +70,8 @@ class StepReport:
     tool_results: List[ToolResult] = field(default_factory=list)
     notes: str = ""
     files_changed: List[str] = field(default_factory=list)
+    verification_passed: bool = False
+    verification_evidence: str = ""
 
 
 @dataclass
