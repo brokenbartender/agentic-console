@@ -657,7 +657,7 @@ class AgentApp:
         self.plan_text.configure(state=tk.DISABLED)
 
         ttk.Label(right, text="Action Cards").pack(anchor="w", pady=(6, 0))
-        cols = ("step", "action", "target", "reason", "status", "timestamp")
+        cols = ("step", "action", "target", "risk", "reason", "status", "timestamp")
         self.action_tree = ttk.Treeview(right, columns=cols, show="headings", height=10)
         for col in cols:
             self.action_tree.heading(col, text=col)
@@ -1393,11 +1393,19 @@ class AgentApp:
         for item in self.action_tree.get_children():
             self.action_tree.delete(item)
         self._action_items = {}
+        risk_map = {}
+        if self.current_run and getattr(self.current_run, "plan_schema", None):
+            try:
+                for s in self.current_run.plan_schema.steps:
+                    risk_map[int(s.step_id)] = s.risk
+            except Exception:
+                risk_map = {}
         for step in plan_steps:
+            risk = risk_map.get(step.step, "safe")
             item_id = self.action_tree.insert(
                 "",
                 tk.END,
-                values=(step.step, step.action, step.target, step.reason, "pending", ""),
+                values=(step.step, step.action, step.target, risk, step.reason, "pending", ""),
             )
             self._action_items[step.step] = item_id
 
@@ -3016,6 +3024,8 @@ class AgentApp:
             report.failure_reason = "needs_user_input"
             return report
         tool_calls = 0
+        if "per_step" not in report.cost:
+            report.cost["per_step"] = []
         started = time.time()
         for step in plan.steps:
             if start_step_id and step.step_id < start_step_id:
@@ -3039,6 +3049,17 @@ class AgentApp:
             )
             step_rep = StepReport(step_id=step.step_id, title=step.title, status="running")
             report.steps.append(step_rep)
+            try:
+                step_tokens = estimate_tokens(step.title + json.dumps(step.args))
+                step_cost = estimate_cost(
+                    step_tokens,
+                    max(1, int(step_tokens * 0.3)),
+                    self.settings.openai_cost_input_per_million,
+                    self.settings.openai_cost_output_per_million,
+                )
+                report.cost["per_step"].append({"step_id": step.step_id, "tokens": step_tokens, "cost": step_cost})
+            except Exception:
+                pass
             if step.tool != "agent":
                 tool_calls += 1
                 if tool_calls > plan.budget.max_tool_calls:
@@ -3132,6 +3153,18 @@ class AgentApp:
                             backoff = float(step.args.get("backoff_s") or 0.5)
                         except Exception:
                             backoff = 0.5
+                        retry = step.args.get("retry") or {}
+                        if isinstance(retry, dict):
+                            wait_s = float(retry.get("wait_s") or 0)
+                            scroll = retry.get("scroll")
+                            if scroll is not None and step.tool == "computer":
+                                try:
+                                    payload = {"mode": "act", "action": "scroll", "params": {"amount": int(scroll), "backend": self._get_computer_backend(step.args)}}
+                                    self._execute_tool("computer", json.dumps(payload))
+                                except Exception:
+                                    pass
+                            if wait_s > 0:
+                                time.sleep(wait_s)
                     if attempt < step.max_attempts:
                         time.sleep(backoff * attempt)
                 if tr.ok:
