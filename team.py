@@ -83,3 +83,39 @@ class TwoAgentOrchestrator:
         exec_out = self.executor_chat(f"Executor: execute this plan.\nPlan:\n{plan}\nTask: {task}")
         review = self.planner_chat(f"Planner: verify success criteria and note issues.\nOutput:\n{exec_out}")
         return "\n\n".join(["## Planner Plan", plan or "", "## Executor", exec_out or "", "## Planner Review", review or ""])
+class ManagerWorkerOrchestrator:
+    def __init__(self, agent_chat):
+        self.agent_chat = agent_chat
+
+    def run(self, manager: AgentRole, workers: List[AgentRole], task: str) -> str:
+        outputs = []
+        manager_prompt = (
+            f"Role: {manager.name}\nInstructions: {manager.instructions}\n"
+            "You are the manager. Produce a short plan and assign work to workers.\n"
+            f"Task: {task}\n"
+            "Respond with a brief plan and 1-3 bullet assignments."
+        )
+        plan = self.agent_chat(manager_prompt)
+        outputs.append(f"## {manager.name}\n{plan}")
+        for worker in workers:
+            tools = ", ".join(worker.allowed_tools or [])
+            sop_text = f"SOP: {worker.sop}\n" if worker.sop else ""
+            worker_prompt = (
+                f"Role: {worker.name}\n"
+                f"Instructions: {worker.instructions}\n"
+                f"{sop_text}"
+                f"Allowed tools: {tools}\n"
+                "Execute only the manager's assignment. Do not create new tasks.\n"
+                f"Manager plan:\n{plan}\n"
+                f"Task: {task}"
+            )
+            out = self.agent_chat(worker_prompt)
+            outputs.append(f"## {worker.name}\n{out}")
+        review_prompt = (
+            f"Role: {manager.name}\nInstructions: {manager.instructions}\n"
+            "Review the worker outputs. Summarize issues or approve.\n"
+            f"Outputs:\n{chr(10).join(outputs)}"
+        )
+        review = self.agent_chat(review_prompt)
+        outputs.append(f"## {manager.name} Review\n{review}")
+        return "\n\n".join(outputs)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import List
+from typing import List, Dict, Any
 
 try:
     import fitz
@@ -48,6 +48,34 @@ def capture_screenshot(path: str) -> str:
     image = pyautogui.screenshot()
     image.save(path)
     return path
+
+
+def ocr_find_text_boxes(image_path: str, text: str) -> List[Dict[str, Any]]:
+    if pytesseract is None or Image is None:
+        raise RuntimeError("OCR dependencies missing: pytesseract/Pillow")
+    if not text:
+        return []
+    tesseract_cmd = os.getenv("TESSERACT_CMD")
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    img = Image.open(image_path)
+    data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+    target = text.strip().lower()
+    matches: List[Dict[str, Any]] = []
+    for i, word in enumerate(data.get("text", [])):
+        if not word:
+            continue
+        if target in word.strip().lower():
+            try:
+                x = int(data["left"][i])
+                y = int(data["top"][i])
+                w = int(data["width"][i])
+                h = int(data["height"][i])
+                conf = float(data.get("conf", [0])[i])
+            except Exception:
+                continue
+            matches.append({"x": x, "y": y, "w": w, "h": h, "conf": conf, "text": word})
+    return matches
 
 
 def encode_image_data_url(path: str) -> str:

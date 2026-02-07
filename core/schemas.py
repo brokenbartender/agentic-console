@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Literal
 Risk = Literal["safe", "caution", "danger"]
 StepStatus = Literal["planned", "running", "succeeded", "failed", "skipped"]
 RunStatus = Literal["planned", "running", "needs_input", "succeeded", "failed", "cancelled", "complete", "error", "stopped"]
+VerifyType = Literal["uia_present", "dom_present", "file_exists", "sql_returns", "test_passes", "output_contains"]
 
 
 @dataclass
@@ -28,7 +29,14 @@ class PlanStepSchema:
     max_attempts: int = 2
     timeout_s: int = 90
     success_check: str = ""
+    verify: Optional["VerifySchema"] = None
     fallback: Optional["PlanStepSchema"] = None
+
+
+@dataclass
+class VerifySchema:
+    type: VerifyType
+    params: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -45,6 +53,8 @@ class PlanSchema:
     budget: Budget = field(default_factory=Budget)
     created_at: float = 0.0
     model: str = ""
+    needs_user_input: bool = False
+    questions: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

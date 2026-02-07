@@ -33,6 +33,7 @@ import hashlib
 import platform
 import sys
 import asyncio
+import shlex
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
@@ -65,7 +66,7 @@ from deep_research import DeepResearch
 
 from multimodal import ocr_pdf, capture_screenshot
 from vla import LiveDriver
-from ui_automation import snapshot_uia, write_snapshot
+from ui_automation import snapshot_uia, write_snapshot, find_uia_first
 from som_client import save as som_save
 from browser_use_adapter import BrowserUseAdapter, WorkflowUseAdapter
 from workflow_recorder import WorkflowRecorder
@@ -78,7 +79,7 @@ from perception import collect_observation
 from router import choose_model
 
 from policy import requires_confirmation
-from team import TeamOrchestrator, AgentRole
+from team import TeamOrchestrator, AgentRole, ManagerWorkerOrchestrator
 from mcp_adapter import MCPAdapter
 from lsp_tools import find_symbol_def, find_inherits
 from privacy import redact_text
@@ -132,6 +133,7 @@ from orchestrator.state import OrchestratorState, validate_transition
 from core.schemas import (
     PlanSchema,
     PlanStepSchema,
+    VerifySchema,
     ExecutionReport,
     StepReport,
     ToolResult,
@@ -367,6 +369,8 @@ class AgentApp:
         self._vision_enabled = os.getenv("AGENTIC_VISION_LOOP", "false").lower() in ("1", "true", "yes", "on")
         self._vla_enabled = os.getenv("AGENTIC_VLA_ENABLED", "false").lower() in ("1", "true", "yes", "on")
         self._jarvis_enabled = os.getenv("AGENTIC_JARVIS", "false").lower() in ("1", "true", "yes", "on")
+        self._schedule_enabled = bool(os.getenv("AGENTIC_SCHEDULE_JSON", ""))
+        self._schedule_stop = threading.Event()
         if self._dreaming_enabled:
             self._start_dreaming_loop()
         if self._world_loop_enabled:
@@ -377,6 +381,8 @@ class AgentApp:
             self._start_vision_loop()
         if self._jarvis_enabled:
             self._start_jarvis_loop()
+        if self._schedule_enabled:
+            self._start_schedule_loop()
         self._start_watchers()
 
 
@@ -1271,6 +1277,54 @@ class AgentApp:
 
         threading.Thread(target=_loop, daemon=True).start()
 
+    def _load_schedule_entries(self) -> List[Dict[str, Any]]:
+        raw = os.getenv("AGENTIC_SCHEDULE_JSON", "").strip()
+        if not raw:
+            return []
+        try:
+            if os.path.exists(raw):
+                with open(raw, "r", encoding="utf-8") as handle:
+                    raw = handle.read()
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _start_schedule_loop(self) -> None:
+        entries = self._load_schedule_entries()
+        if not entries:
+            return
+        schedule = []
+        now = time.time()
+        for item in entries:
+            try:
+                command = (item.get("command") or "").strip()
+                every = float(item.get("every_seconds") or 0)
+                if not command or every <= 0:
+                    continue
+                schedule.append({"command": command, "every": every, "next": now + every})
+            except Exception:
+                continue
+        if not schedule:
+            return
+
+        def _loop():
+            while not self._schedule_stop.is_set():
+                now_ts = time.time()
+                for entry in schedule:
+                    if now_ts >= entry["next"]:
+                        try:
+                            run = self._create_task_run(entry["command"])
+                            run.approved = True
+                            self.current_run = run
+                            self.task_queue.enqueue(lambda r=run: self._run_task_run(r))
+                            entry["next"] = now_ts + entry["every"]
+                        except Exception:
+                            entry["next"] = now_ts + entry["every"]
+                time.sleep(1.0)
+
+        threading.Thread(target=_loop, daemon=True).start()
+
     def stop_run(self) -> None:
         self.stop_event.set()
         self.pause_event.clear()
@@ -1709,12 +1763,25 @@ class AgentApp:
         bullets = "\n".join([f"{s.step}. {s.action} → {s.target} ({s.reason})" for s in steps])
         return "PLAN (JSON)\n" + json.dumps(json_payload, indent=2) + "\n\nPLAN (BULLETS)\n" + bullets
 
+    def _detect_ambiguity(self, cmd: str) -> bool:
+        text = (cmd or "").strip().lower()
+        if len(text) < 6:
+            return True
+        vague = ("do it", "do that", "fix it", "handle it", "start", "go", "run", "update", "help")
+        if any(text == v or text.endswith(f" {v}") for v in vague):
+            return True
+        pronouns = ("this", "that", "it", "those", "these")
+        if any(p in text.split() for p in pronouns) and len(text.split()) < 4:
+            return True
+        return False
+
     def _create_task_run(self, cmd: str) -> TaskRun:
         run_id = datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
         trace_id = str(uuid.uuid4())
         intent = self._build_intent(cmd)
         steps = self._build_plan(cmd)
         plan_schema = None
+        needs_input = self._detect_ambiguity(cmd)
         try:
             if os.getenv("AGENTIC_LLM_PLANNER", "true").lower() in ("1", "true", "yes", "on"):
                 plan_schema = self._plan_with_llm(cmd)
@@ -1736,7 +1803,28 @@ class AgentApp:
                     ),
                     created_at=time.time(),
                     model=getattr(self.settings, "openai_model", ""),
+                    needs_user_input=needs_input,
+                    questions=(
+                        [
+                            {
+                                "id": "clarify",
+                                "question": "Your request is ambiguous. What exactly should I do?",
+                                "placeholder": "Add concrete target or desired outcome",
+                            }
+                        ]
+                        if needs_input
+                        else []
+                    ),
                 )
+            if plan_schema and needs_input:
+                plan_schema.needs_user_input = True
+                plan_schema.questions = [
+                    {
+                        "id": "clarify",
+                        "question": "Your request is ambiguous. What exactly should I do?",
+                        "placeholder": "Add concrete target or desired outcome",
+                    }
+                ]
         except Exception:
             plan_schema = None
         plan_json = json.dumps(
@@ -1764,6 +1852,11 @@ class AgentApp:
             command=cmd,
             trace_id=trace_id,
         )
+        if needs_input:
+            self._log_event(
+                "needs_input",
+                {"run_id": run_id, "questions": plan_schema.questions if plan_schema else []},
+            )
         self.pending_runs[run_id] = run
         self.memory.create_task_run(
             run_id=run.run_id,
@@ -1896,6 +1989,13 @@ class AgentApp:
             self.log_line("Execution blocked: plan not approved.")
             return
         self.current_run = run
+        if run.plan_schema and getattr(run.plan_schema, "needs_user_input", False):
+            self.log_line("Execution blocked: additional clarification required.")
+            try:
+                self._set_run_status(run, OrchestratorState.PAUSED.value)
+            except Exception:
+                pass
+            return
         self.stop_event.clear()
         self._set_run_status(run, OrchestratorState.RUNNING.value)
         hb = RunHeartbeat(run_id=run.run_id, status=run.status, timestamp=time.time(), trace_id=run.trace_id)
@@ -2446,6 +2546,12 @@ class AgentApp:
 
 
     def _step_to_schema(self, step_id: int, step_text: str) -> PlanStepSchema:
+        raw_text = step_text
+        verify = None
+        if " verify:" in step_text:
+            main, verify_raw = step_text.split(" verify:", 1)
+            step_text = main.strip()
+            verify = self._parse_verify(verify_raw)
         lowered = step_text.strip().lower()
         for name in self.tools.tools.keys():
             prefix = f"{name} "
@@ -2466,6 +2572,7 @@ class AgentApp:
                     requires_confirmation=confirm,
                     timeout_s=90,
                     max_attempts=2,
+                    verify=verify,
                 )
         return PlanStepSchema(
             step_id=step_id,
@@ -2475,12 +2582,12 @@ class AgentApp:
             args={"text": step_text},
             risk="safe",
             requires_confirmation=False,
+            verify=verify,
         )
 
     def _tool_catalog(self) -> list[dict]:
         try:
             tools = UnifiedToolRegistry.from_legacy(self).list()
-            # Keep prompt size bounded.
             if len(tools) > 40:
                 tools = tools[:40]
             for t in tools:
@@ -2506,6 +2613,19 @@ class AgentApp:
             )
         return steps
 
+    def _resolve_entities(self, text: str) -> str:
+        try:
+            blob = self.memory.get("entity_aliases") or "{}"
+            data = json.loads(blob)
+        except Exception:
+            data = {}
+        if not data:
+            return text
+        out = text
+        for alias, canonical in data.items():
+            out = re.sub(rf"\\b{re.escape(alias)}\\b", canonical, out, flags=re.IGNORECASE)
+        return out
+
     def _plan_with_llm(self, instruction: str) -> PlanSchema | None:
         instruction = self._resolve_entities(instruction)
         tools = self._tool_catalog()
@@ -2521,19 +2641,6 @@ class AgentApp:
             raw = self._agent_chat(prompt + "\nUser goal: " + instruction) or ""
         except Exception:
             return None
-
-    def _resolve_entities(self, text: str) -> str:
-        try:
-            blob = self.memory.get("entity_aliases") or "{}"
-            data = json.loads(blob)
-        except Exception:
-            data = {}
-        if not data:
-            return text
-        out = text
-        for alias, canonical in data.items():
-            out = re.sub(rf"\\b{re.escape(alias)}\\b", canonical, out, flags=re.IGNORECASE)
-        return out
         if not raw:
             return None
         data = None
@@ -2606,6 +2713,21 @@ class AgentApp:
             if step.tool != "agent" and step.tool not in self.tools.tools:
                 step.tool = "agent"
         return plan
+
+    def _parse_verify(self, raw: str) -> Optional[VerifySchema]:
+        raw = (raw or "").strip()
+        if not raw:
+            return None
+        parts = shlex.split(raw)
+        if not parts:
+            return None
+        vtype = parts[0].strip().lower()
+        params: Dict[str, Any] = {}
+        for item in parts[1:]:
+            if "=" in item:
+                k, v = item.split("=", 1)
+                params[k.strip()] = v.strip()
+        return VerifySchema(type=vtype, params=params)
 
     def _execute_step_schema(self, step: PlanStepSchema) -> ToolResult:
         t0 = time.time()
@@ -2733,6 +2855,71 @@ class AgentApp:
         if risk == "destructive" and not self._consume_token(name):
             return True
         return requires_confirmation(risk, getattr(self.settings, "autonomy_level", "semi"))
+
+    def _verify_step(self, step: PlanStepSchema, result: ToolResult) -> tuple[bool, str]:
+        verify = step.verify
+        if verify is None:
+            return True, ""
+        vtype = (verify.type or "").strip().lower()
+        params = verify.params or {}
+        if vtype == "output_contains":
+            needle = (params.get("text") or "").strip()
+            return (needle.lower() in (result.output_preview or "").lower()), f"output_contains:{needle}"
+        if vtype == "file_exists":
+            path = params.get("path") or params.get("file") or ""
+            ok = bool(path) and os.path.exists(path)
+            return ok, f"file_exists:{path}"
+        if vtype == "dom_present":
+            selector = params.get("selector") or ""
+            if not selector or self.page is None:
+                return False, "dom_present:missing_selector_or_page"
+            try:
+                count = self.page.locator(selector).count()
+                return count > 0, f"dom_present:{selector}"
+            except Exception as exc:
+                return False, f"dom_present:error:{exc}"
+        if vtype == "uia_present":
+            try:
+                query = params.get("query") or {}
+                if isinstance(query, str):
+                    try:
+                        query = json.loads(query)
+                    except Exception:
+                        query = {"name": query}
+                if not isinstance(query, dict):
+                    query = {}
+                found = find_uia_first(query) is not None
+                return found, f"uia_present:{query}"
+            except Exception as exc:
+                return False, f"uia_present:error:{exc}"
+        if vtype == "sql_returns":
+            db_path = params.get("db_path") or ""
+            query = params.get("query") or ""
+            if not db_path or not query:
+                return False, "sql_returns:missing_params"
+            try:
+                import sqlite3
+                with sqlite3.connect(db_path) as conn:
+                    cur = conn.execute(query)
+                    row = cur.fetchone()
+                return row is not None, "sql_returns:row_found" if row is not None else "sql_returns:no_rows"
+            except Exception as exc:
+                return False, f"sql_returns:error:{exc}"
+        if vtype == "test_passes":
+            cmd = params.get("command") or ""
+            if not cmd:
+                return False, "test_passes:missing_command"
+            allowed = os.getenv("AGENTIC_ALLOWED_VERIFY", "")
+            if allowed:
+                allow_list = [c.strip() for c in allowed.split(";") if c.strip()]
+                if cmd not in allow_list:
+                    return False, "test_passes:command_not_allowed"
+            try:
+                proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=step.timeout_s)
+                return proc.returncode == 0, f"test_passes:rc={proc.returncode}"
+            except Exception as exc:
+                return False, f"test_passes:error:{exc}"
+        return False, f"verify:unknown_type:{vtype}"
 
     def _run_plan_schema(self, plan: PlanSchema, report: ExecutionReport | None = None, start_step_id: int | None = None) -> ExecutionReport:
         if report is None:
@@ -2912,6 +3099,22 @@ class AgentApp:
                     extra={"step_id": step.step_id},
                 )
                 if tr.ok:
+                    verified, evidence = self._verify_step(step, tr)
+                    step_rep.verification_passed = verified
+                    step_rep.verification_evidence = evidence
+                    if not verified:
+                        self._log_event(
+                            "step_verify_failed",
+                            {"step": step.step_id, "evidence": evidence},
+                            extra={"step_id": step.step_id},
+                        )
+                        if attempt == step.max_attempts:
+                            self._log_event(
+                                "nudge",
+                                {"message": f"Verification failed for step {step.step_id}. Consider alternate strategy."},
+                                extra={"step_id": step.step_id},
+                            )
+                        continue
                     ok = True
                     break
             step_rep.status = "succeeded" if ok else "failed"
@@ -2934,6 +3137,12 @@ class AgentApp:
                         ok = False
                 if not ok:
                     step_rep.status = "failed"
+            if step_rep.attempts > 1:
+                self._log_event(
+                    "nudge",
+                    {"message": f"Step {step.step_id} required {step_rep.attempts} attempts."},
+                    extra={"step_id": step.step_id},
+                )
             self._log_event("step_finished", {"status": step_rep.status}, extra={"step_id": step.step_id})
             if step_rep.status == "failed":
                 self._current_step_id = None
@@ -3142,6 +3351,38 @@ class AgentApp:
             )
         except Exception:
             return None
+    def _diff_runs(self, run_a: str, run_b: str) -> str:
+        base = os.path.join(self.settings.data_dir, "runs")
+        def load_json(path: str):
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    return json.load(handle)
+            except Exception:
+                return {}
+        a_plan = load_json(os.path.join(base, run_a, "plan.json"))
+        b_plan = load_json(os.path.join(base, run_b, "plan.json"))
+        a_rep = load_json(os.path.join(base, run_a, "report.json"))
+        b_rep = load_json(os.path.join(base, run_b, "report.json"))
+        lines = [
+            f"Run A: {run_a}",
+            f"Run B: {run_b}",
+            "",
+            f"Status: {a_rep.get('status')} -> {b_rep.get('status')}",
+            f"Steps: {len(a_plan.get('steps', []))} -> {len(b_plan.get('steps', []))}",
+            f"Files changed: {len(a_rep.get('files_changed', []))} -> {len(b_rep.get('files_changed', []))}",
+        ]
+        a_steps = a_plan.get("steps", [])
+        b_steps = b_plan.get("steps", [])
+        if a_steps and b_steps:
+            lines.append("")
+            lines.append("Step titles diff:")
+            max_len = max(len(a_steps), len(b_steps))
+            for i in range(max_len):
+                a_title = a_steps[i].get("title") if i < len(a_steps) else "<missing>"
+                b_title = b_steps[i].get("title") if i < len(b_steps) else "<missing>"
+                if a_title != b_title:
+                    lines.append(f"- {i+1}: {a_title} -> {b_title}")
+        return "\n".join(lines)
 
     def _execute_tool(self, name: str, args: str, confirm: bool = False, dry_run: bool = False):
 
@@ -3293,6 +3534,12 @@ class AgentApp:
             dst = os.path.join(self.settings.data_dir, "runs", new_id)
             shutil.copytree(src, dst)
             self.log_line(f"Forked run {run_id} -> {new_id}")
+        if lowered.startswith("diff_runs "):
+            parts = step.split()
+            if len(parts) < 3:
+                raise RuntimeError("diff_runs requires: diff_runs <run_a> <run_b>")
+            out = self._diff_runs(parts[1], parts[2])
+            self.log_line(out)
             return
 
         if lowered.startswith("uia_snapshot"):
@@ -4736,16 +4983,17 @@ class AgentApp:
 
             if lowered.startswith("agent_team "):
                 task = cmd.split(" ", 1)[1].strip()
-                roles = [
-                    AgentRole("Planner", "Create a brief plan.", allowed_tools=["plan", "analyze"]),
-                    AgentRole("Builder", "Execute the plan or draft the solution.", allowed_tools=["shell", "files", "computer"]),
-                    AgentRole("Reviewer", "Review for issues and improvements.", allowed_tools=["analyze"]),
-                    AgentRole("Security", "Check for security risks or dual-use concerns.", allowed_tools=["analyze"]),
-                    AgentRole("QA", "Validate correctness and edge cases.", allowed_tools=["analyze"]),
+                manager = AgentRole("Manager", "Plan only. Assign tasks to workers.", allowed_tools=[])
+                workers = [
+                    AgentRole("Builder", "Execute assigned work only.", allowed_tools=["files", "sandbox", "browser", "computer"]),
+                    AgentRole("Reviewer", "Review the output only; no tool use.", allowed_tools=[]),
+                    AgentRole("Security", "Check for security risks; no tool use.", allowed_tools=[]),
+                    AgentRole("QA", "Validate correctness and edge cases.", allowed_tools=[]),
                 ]
-                for role in roles:
+                orchestrator = ManagerWorkerOrchestrator(self._agent_chat)
+                output = orchestrator.run(manager, workers, task)
+                for role in [manager] + workers:
                     self._log_event("agent_handoff", {"role": role.name, "tools": role.allowed_tools})
-                output = self.team.run(roles, task)
                 self.log_line(output)
                 return
 

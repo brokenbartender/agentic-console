@@ -7,12 +7,17 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from multimodal import capture_screenshot
-from ui_automation import write_snapshot, snapshot_uia
+from multimodal import capture_screenshot, ocr_find_text_boxes
+from ui_automation import write_snapshot, find_uia_first
 try:
     import pyautogui
 except Exception:
     pyautogui = None
+
+try:
+    import pygetwindow as gw
+except Exception:
+    gw = None
 
 
 @dataclass
@@ -29,6 +34,87 @@ class ComputerObservation:
 class ComputerController:
     def __init__(self, app) -> None:
         self.app = app
+        self.last_observation: Optional[ComputerObservation] = None
+        self.selector_cache_path = os.path.join(self.app.settings.data_dir, "selector_cache.json")
+        self.selector_cache: Dict[str, Any] = {}
+        self._load_selector_cache()
+
+    def _load_selector_cache(self) -> None:
+        try:
+            if os.path.exists(self.selector_cache_path):
+                with open(self.selector_cache_path, "r", encoding="utf-8") as handle:
+                    self.selector_cache = json.load(handle) or {}
+        except Exception:
+            self.selector_cache = {}
+
+    def _save_selector_cache(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.selector_cache_path), exist_ok=True)
+            with open(self.selector_cache_path, "w", encoding="utf-8") as handle:
+                json.dump(self.selector_cache, handle, indent=2)
+        except Exception:
+            return
+
+    def _active_window_title(self) -> str:
+        if gw is None:
+            return ""
+        try:
+            win = gw.getActiveWindow()
+            return win.title if win else ""
+        except Exception:
+            return ""
+
+    def _cache_key(self, backend: str, app_title: str, query: Dict[str, Any]) -> str:
+        payload = {"backend": backend, "app_title": app_title, "query": query}
+        return json.dumps(payload, sort_keys=True)
+
+    def _resolve_desktop_target(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        x = params.get("x")
+        y = params.get("y")
+        if x is not None and y is not None:
+            return {"x": x, "y": y, "source": "coords"}
+
+        app_title = (self.last_observation.active_window if self.last_observation else "") or self._active_window_title()
+
+        uia_query = params.get("uia_query")
+        if isinstance(uia_query, dict):
+            key = self._cache_key("desktop", app_title, uia_query)
+            cached = self.selector_cache.get(key)
+            if isinstance(cached, dict) and "x" in cached and "y" in cached:
+                return {"x": cached["x"], "y": cached["y"], "source": "uia_cache"}
+            rect = find_uia_first(uia_query)
+            if rect:
+                cx = int(rect["x"] + rect["w"] / 2)
+                cy = int(rect["y"] + rect["h"] / 2)
+                self.selector_cache[key] = {"x": cx, "y": cy, "rect": rect, "ts": time.time()}
+                self._save_selector_cache()
+                return {"x": cx, "y": cy, "source": "uia_query"}
+
+        ocr_text = params.get("ocr_text")
+        if ocr_text:
+            obs = self.last_observation
+            if obs is None or not obs.screenshot_path or not os.path.exists(obs.screenshot_path):
+                obs = self.observe(os.path.join(self.app.settings.data_dir, "runs", "latest"))
+            try:
+                boxes = ocr_find_text_boxes(obs.screenshot_path, str(ocr_text))
+            except Exception:
+                boxes = []
+            if boxes:
+                box = boxes[0]
+                cx = int(box["x"] + box["w"] / 2)
+                cy = int(box["y"] + box["h"] / 2)
+                return {"x": cx, "y": cy, "source": "ocr_text"}
+
+        bbox = params.get("bbox")
+        if isinstance(bbox, dict):
+            try:
+                cx = int(bbox["x"] + bbox["w"] / 2)
+                cy = int(bbox["y"] + bbox["h"] / 2)
+                return {"x": cx, "y": cy, "source": "bbox"}
+            except Exception:
+                pass
+
+        raise RuntimeError("desktop action requires x,y or uia_query/ocr_text/bbox")
 
     def observe(self, out_dir: str) -> ComputerObservation:
         os.makedirs(out_dir, exist_ok=True)
@@ -59,66 +145,46 @@ class ComputerController:
                 cursor = {"x": int(pos.x), "y": int(pos.y)}
             except Exception:
                 cursor = {"x": 0, "y": 0}
-        return ComputerObservation(
+        obs = ComputerObservation(
             timestamp=time.time(),
             screenshot_path=screenshot_path,
             uia_path=uia_path,
-            active_window="",
+            active_window=self._active_window_title(),
             cursor=cursor,
             screenshot_size=screenshot_size,
             screenshot_hash=screenshot_hash,
         )
+        self.last_observation = obs
+        return obs
 
     def _act_desktop(self, action: str, params: Dict[str, Any]) -> str:
         if pyautogui is None:
             raise RuntimeError("computer desktop backend requires pyautogui. Install with: pip install pyautogui")
         action = (action or "").strip().lower()
         if action == "click":
-            x = params.get("x")
-            y = params.get("y")
-            if x is None or y is None:
-                uia_query = params.get("uia_query") or {}
-                if uia_query:
-                    coords = self._resolve_uia_query(uia_query)
-                    if coords:
-                        x, y = coords
-            if x is None or y is None:
-                raise RuntimeError("computer.click desktop requires x,y")
+            target = self._resolve_desktop_target(params)
+            x = target["x"]
+            y = target["y"]
             pyautogui.click(x, y)
-            return f"clicked at {x},{y}"
+            return f"clicked at {x},{y} ({target.get('source')})"
         if action == "double_click":
-            x = params.get("x")
-            y = params.get("y")
-            if x is None or y is None:
-                uia_query = params.get("uia_query") or {}
-                if uia_query:
-                    coords = self._resolve_uia_query(uia_query)
-                    if coords:
-                        x, y = coords
-            if x is None or y is None:
-                raise RuntimeError("computer.double_click desktop requires x,y")
+            target = self._resolve_desktop_target(params)
+            x = target["x"]
+            y = target["y"]
             pyautogui.doubleClick(x, y)
-            return f"double clicked at {x},{y}"
+            return f"double clicked at {x},{y} ({target.get('source')})"
         if action == "right_click":
-            x = params.get("x")
-            y = params.get("y")
-            if x is None or y is None:
-                uia_query = params.get("uia_query") or {}
-                if uia_query:
-                    coords = self._resolve_uia_query(uia_query)
-                    if coords:
-                        x, y = coords
-            if x is None or y is None:
-                raise RuntimeError("computer.right_click desktop requires x,y")
+            target = self._resolve_desktop_target(params)
+            x = target["x"]
+            y = target["y"]
             pyautogui.rightClick(x, y)
-            return f"right clicked at {x},{y}"
+            return f"right clicked at {x},{y} ({target.get('source')})"
         if action == "move":
-            x = params.get("x")
-            y = params.get("y")
-            if x is None or y is None:
-                raise RuntimeError("computer.move desktop requires x,y")
+            target = self._resolve_desktop_target(params)
+            x = target["x"]
+            y = target["y"]
             pyautogui.moveTo(x, y)
-            return f"moved to {x},{y}"
+            return f"moved to {x},{y} ({target.get('source')})"
         if action == "scroll":
             amount = int(params.get("amount") or 0)
             pyautogui.scroll(amount)
@@ -157,28 +223,6 @@ class ComputerController:
             self.app._execute_tool("open", path)
             return f"opened {path}"
         raise RuntimeError(f"computer.act unsupported browser action: {action}")
-
-    def _resolve_uia_query(self, query: Dict[str, Any]) -> Optional[tuple[int, int]]:
-        name = (query.get("name") or query.get("title") or "").strip().lower()
-        role = (query.get("role") or "").strip().lower()
-        try:
-            nodes = snapshot_uia(limit=500)
-        except Exception:
-            return None
-        for node in nodes:
-            if role and node.get("type") != role and node.get("type") != "window":
-                continue
-            title = (node.get("title") or "").strip().lower()
-            if name and name not in title:
-                continue
-            x = node.get("x")
-            y = node.get("y")
-            w = node.get("w")
-            h = node.get("h")
-            if x is None or y is None or w is None or h is None:
-                continue
-            return (int(x + w / 2), int(y + h / 2))
-        return None
 
     def act(self, action: str, params: Dict[str, Any]) -> str:
         backend = (params.get("backend") or "browser").strip().lower()
