@@ -50,28 +50,30 @@ def main_dashboard():
                 tab_runs = ui.tab("Runs")
                 tab_canvas = ui.tab("Canvas")
                 tab_think = ui.tab("Thinking")
+                tab_graph = ui.tab("Graph")
             with ui.tab_panels(tabs, value=tab_plan).classes("w-full bg-transparent"):
                 with ui.tab_panel(tab_plan):
                     plan_container = ui.column().classes("w-full gap-2")
                     exec_container = ui.column().classes("w-full gap-2")
+                    edit_mode = ui.switch("Edit Plan", value=False)
                     with ui.row().classes("w-full mt-4 justify-end hidden") as approval_row:
                         ui.button("Reject", color="red", icon="close").props("outline")
-                    ui.button("Approve Once", on_click=lambda: handle_command("approve_once")).props("flat color=primary")
-                    ui.button("Always Allow", on_click=lambda: handle_command("approve_always")).props("flat color=primary")
-                    ui.button("Never Allow", on_click=lambda: handle_command("approve_never")).props("flat color=red")
-                    approve_btn = ui.button("APPROVE RUN", color="green", icon="check")
-                with ui.row().classes("w-full mt-2 gap-2 items-center"):
-                    ui.switch("Approve Writes", value=False, on_change=lambda e: ctrl.set_step_approval(e.value))
-                    ui.select(
-                        ["browser", "desktop"],
-                        value=ctrl.get_computer_backend(),
-                        on_change=lambda e: ctrl.set_computer_backend(e.value),
-                    ).classes("w-32")
-                    ui.switch(
-                        "Desktop Actions Require Approval",
-                        value=ctrl.get_desktop_approval(),
-                        on_change=lambda e: ctrl.set_desktop_approval(e.value),
-                    )
+                        ui.button("Approve Once", on_click=lambda: handle_command("approve_once")).props("flat color=primary")
+                        ui.button("Always Allow", on_click=lambda: handle_command("approve_always")).props("flat color=primary")
+                        ui.button("Never Allow", on_click=lambda: handle_command("approve_never")).props("flat color=red")
+                        approve_btn = ui.button("APPROVE RUN", color="green", icon="check")
+                    with ui.row().classes("w-full mt-2 gap-2 items-center"):
+                        ui.switch("Approve Writes", value=False, on_change=lambda e: ctrl.set_step_approval(e.value))
+                        ui.select(
+                            ["browser", "desktop"],
+                            value=ctrl.get_computer_backend(),
+                            on_change=lambda e: ctrl.set_computer_backend(e.value),
+                        ).classes("w-32")
+                        ui.switch(
+                            "Desktop Actions Require Approval",
+                            value=ctrl.get_desktop_approval(),
+                            on_change=lambda e: ctrl.set_desktop_approval(e.value),
+                        )
                 with ui.tab_panel(tab_mem):
                     ui.label("Active Context").classes("text-sm font-bold")
                     ui.tree(
@@ -96,6 +98,8 @@ def main_dashboard():
                     ui.button("Save", on_click=lambda: save_canvas()).props("flat color=primary")
                 with ui.tab_panel(tab_think):
                     thinking_container = ui.column().classes("w-full gap-2")
+                with ui.tab_panel(tab_graph):
+                    graph_container = ui.column().classes("w-full gap-2")
 
     def show_agent_info():
         info = ctrl.describe_agent()
@@ -172,6 +176,7 @@ def main_dashboard():
     def render_plan():
         plan_container.clear()
         exec_container.clear()
+        input_refs = []
         run = ctrl.current_run
         if not run:
             with plan_container:
@@ -187,9 +192,38 @@ def main_dashboard():
                         with ui.row().classes("items-center justify-between w-full"):
                             ui.label(f"{step.step_id}. {step.title}").classes("font-bold font-mono text-sm")
                             ui.badge(step.risk.upper(), color="gray" if step.risk == "safe" else "orange")
-                        ui.label(f"Tool: {step.tool}").classes("text-xs text-gray-400")
-                        if step.requires_confirmation:
-                            ui.badge("CONFIRM", color="red")
+                        if edit_mode.value:
+                            title_in = ui.input(label="Title", value=step.title).classes("w-full")
+                            tool_in = ui.input(label="Tool", value=step.tool).classes("w-full")
+                            args_in = ui.textarea(label="Args (json)", value=json.dumps(step.args)).classes("w-full")
+                            input_refs.append((step.step_id, title_in, tool_in, args_in, step))
+                        else:
+                            ui.label(f"Tool: {step.tool}").classes("text-xs text-gray-400")
+                            if step.requires_confirmation:
+                                ui.badge("CONFIRM", color="red")
+            if edit_mode.value:
+                def _save_plan():
+                    edits = []
+                    for sid, title_in, tool_in, args_in, step in input_refs:
+                        try:
+                            args = json.loads(args_in.value or "{}")
+                        except Exception:
+                            args = {}
+                        edits.append({
+                            "step_id": sid,
+                            "title": title_in.value,
+                            "intent": step.intent,
+                            "tool": tool_in.value,
+                            "args": args,
+                            "risk": step.risk,
+                            "requires_confirmation": step.requires_confirmation,
+                            "max_attempts": step.max_attempts,
+                            "timeout_s": step.timeout_s,
+                            "success_check": step.success_check,
+                        })
+                    if ctrl.update_plan(edits):
+                        ctrl.log("Plan updated.", type="success")
+                ui.button("Save Plan", on_click=_save_plan).props("flat color=primary")
         report = getattr(run, "report", None)
         if report:
             with exec_container:
@@ -220,6 +254,11 @@ def main_dashboard():
         if run.status == "planned":
             approval_row.classes(remove="hidden")
             approve_btn.on_click(lambda: (ctrl.approve_run(run.run_id), render_plan()))
+        if run.status in ("needs_input", "error", "failed"):
+            with exec_container:
+                ui.label("Need help?").classes("text-xs font-bold text-yellow-400")
+                ui.label("I can explain approvals or suggest safer steps.").classes("text-[10px] text-gray-400")
+                ui.button("Explain", on_click=lambda: run_task("explain approvals")).props("flat color=primary")
 
     def render_runs():
         runs_container.clear()
@@ -236,6 +275,23 @@ def main_dashboard():
         with thinking_container:
             for entry in ctrl.activity_log[-8:]:
                 ui.label(f"• {entry['message']}").classes("text-xs text-gray-400")
+
+    def render_graph():
+        graph_container.clear()
+        run = ctrl.current_run
+        if not run or not getattr(run, "plan_schema", None):
+            with graph_container:
+                ui.label("No plan to render.").classes("text-xs text-gray-500")
+            return
+        plan = run.plan_schema
+        lines = ["flowchart TD"]
+        for step in plan.steps:
+            lines.append(f"  S{step.step_id}[\"{step.step_id}. {step.title}\"]")
+        for idx in range(len(plan.steps) - 1):
+            lines.append(f"  S{plan.steps[idx].step_id} --> S{plan.steps[idx+1].step_id}")
+        mermaid = "\n".join(lines)
+        with graph_container:
+            ui.markdown(f\"\"\"```mermaid\n{mermaid}\n```\"\"\")
 
     def fork_run(run_id: str):
         goal = ctrl.load_run_goal(run_id)
@@ -298,6 +354,7 @@ def main_dashboard():
     ui.timer(1.0, render_runs)
     ui.timer(1.0, render_thinking)
     ui.timer(1.0, render_activity)
+    ui.timer(2.0, render_graph)
     ui.timer(1.0, render_nudges)
 
 def run_dashboard():

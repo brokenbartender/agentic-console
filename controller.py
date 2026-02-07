@@ -445,6 +445,58 @@ class HeadlessController:
         except Exception:
             pass
 
+    def update_plan(self, steps: List[Dict[str, Any]]) -> bool:
+        run = self.current_run
+        if not run or not getattr(run, "plan_schema", None):
+            return False
+        plan = run.plan_schema
+        updated_steps = []
+        for idx, step in enumerate(steps, 1):
+            updated_steps.append(
+                PlanStepSchema(
+                    step_id=int(step.get("step_id") or idx),
+                    title=step.get("title") or "",
+                    intent=step.get("intent") or "",
+                    tool=step.get("tool") or "",
+                    args=step.get("args") or {},
+                    risk=step.get("risk") or "safe",
+                    requires_confirmation=bool(step.get("requires_confirmation") or False),
+                    max_attempts=int(step.get("max_attempts") or 2),
+                    timeout_s=int(step.get("timeout_s") or 90),
+                    success_check=step.get("success_check") or "",
+                )
+            )
+        plan.steps = updated_steps
+        run.plan_steps = [
+            PlanStep(
+                step=s.step_id,
+                action=s.tool or "execute",
+                target=s.title,
+                value="",
+                reason=s.intent or "edited",
+                command=s.args.get("command") or f"{s.tool} {json.dumps(s.args)}".strip(),
+            )
+            for s in updated_steps
+        ]
+        try:
+            plan_json = json.dumps(
+                [
+                    {
+                        "step": s.step,
+                        "action": s.action,
+                        "target": s.target,
+                        "value": s.value,
+                        "reason": s.reason,
+                        "command": s.command,
+                    }
+                    for s in run.plan_steps
+                ]
+            )
+            self.memory.update_task_run(run.run_id, plan_json=plan_json)
+        except Exception:
+            pass
+        return True
+
     def set_computer_backend(self, backend: str) -> None:
         value = (backend or "browser").strip().lower()
         self.memory.set("computer_backend", value)
