@@ -92,6 +92,24 @@ def main_dashboard():
                     )
                 with ui.tab_panel(tab_runs):
                     runs_container = ui.column().classes("w-full gap-2")
+                    with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
+                        ui.label("Compare Runs").classes("text-xs font-bold text-gray-300")
+                        run_options = []
+                        run_a = ui.select(run_options, label="Run A")
+                        run_b = ui.select(run_options, label="Run B")
+                        def _open_diff():
+                            if not run_a.value or not run_b.value:
+                                return
+                            diff_text = ctrl.handle_command(f"diff_runs {run_a.value} {run_b.value}")
+                            with ui.dialog() as dialog:
+                                with ui.card().classes("w-[700px] max-w-full"):
+                                    ui.label(f"Diff: {run_a.value} vs {run_b.value}").classes("text-sm font-bold")
+                                    ui.code(diff_text or "").classes("w-full")
+                                    with ui.row().classes("justify-end gap-2"):
+                                        ui.button("Approve", on_click=lambda: (ctrl.log(f\"Diff approved: {run_a.value} {run_b.value}\", type=\"success\"), dialog.close())).props("flat color=primary")
+                                        ui.button("Close", on_click=dialog.close).props("outline")
+                            dialog.open()
+                        ui.button("Diff Runs", on_click=_open_diff).props("flat color=primary")
                 with ui.tab_panel(tab_canvas):
                     ui.label("Collaborative Canvas").classes("text-sm font-bold")
                     canvas_area = ui.textarea(placeholder="Drafts, code, notes...").classes("w-full")
@@ -263,6 +281,12 @@ def main_dashboard():
     def render_runs():
         runs_container.clear()
         runs = ctrl.list_runs()
+        run_ids = [item.get("run_id", "") for item in runs if item.get("run_id")]
+        try:
+            run_a.options = run_ids
+            run_b.options = run_ids
+        except Exception:
+            pass
         for item in runs:
             with ui.card().classes("w-full p-2 bg-gray-800 border border-gray-700"):
                 ui.label(item.get("run_id", ""))

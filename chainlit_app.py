@@ -71,18 +71,23 @@ async def _event_stream() -> None:
                         await cl.Message(content=ui_block.get("message", "")).send()
                         continue
                     if kind == "form":
-                        cl.user_session.set("pending_form", ui_block)
                         fields = ui_block.get("fields") or []
-                        lines = [f"Form requested: {ui_block.get('title','Form')}"]
-                        for f in fields:
-                            label = f.get("label") or f.get("key") or "field"
-                            placeholder = f.get("placeholder") or ""
+                        cl.user_session.set("pending_form", ui_block)
+                        cl.user_session.set("pending_form_fields", fields)
+                        cl.user_session.set("pending_form_values", {})
+                        cl.user_session.set("pending_form_idx", 0)
+                        title = ui_block.get("title", "Form")
+                        await cl.Message(content=f"{title}: I'll ask for each field.").send()
+                        if fields:
+                            f0 = fields[0]
+                            label = f0.get("label") or f0.get("key") or f0.get("name") or "field"
+                            placeholder = f0.get("placeholder") or ""
+                            prompt = f"{label}"
                             if placeholder:
-                                lines.append(f"- {label} ({placeholder})")
-                            else:
-                                lines.append(f"- {label}")
-                        await cl.Message(content="\n".join(lines)).send()
-                        await cl.Message(content="Reply with JSON of field values.").send()
+                                prompt += f" ({placeholder})"
+                            await cl.AskUserMessage(content=prompt).send()
+                        else:
+                            await cl.Message(content="No fields provided.").send()
                         continue
                     if kind == "diff":
                         diff_text = ui_block.get("diff") or ""
@@ -116,18 +121,51 @@ async def on_message(message: cl.Message) -> None:
     text = message.content.strip()
     pending_form = cl.user_session.get("pending_form")
     if pending_form:
-        try:
-            data = json.loads(text)
-        except Exception:
-            await cl.Message(content="Invalid JSON. Please reply with JSON like {\"field\": \"value\"}.").send()
+        # If user already sent JSON, accept it.
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                data = json.loads(text)
+            except Exception:
+                await cl.Message(content="Invalid JSON. Please reply with JSON like {\"field\": \"value\"}.").send()
+                return
+            cl.user_session.set("pending_form", None)
+            cl.user_session.set("pending_form_fields", None)
+            cl.user_session.set("pending_form_values", None)
+            cl.user_session.set("pending_form_idx", None)
+            try:
+                output = ctrl.handle_command("submit_form " + json.dumps(data))
+            except Exception as exc:
+                output = f"Error: {exc}"
+            await cl.Message(content=output or "Form submitted.").send()
             return
-        cl.user_session.set("pending_form", None)
-        try:
-            output = ctrl.handle_command("submit_form " + json.dumps(data))
-        except Exception as exc:
-            output = f"Error: {exc}"
-        await cl.Message(content=output or "Form submitted.").send()
-        return
+        fields = cl.user_session.get("pending_form_fields") or []
+        values = cl.user_session.get("pending_form_values") or {}
+        idx = int(cl.user_session.get("pending_form_idx") or 0)
+        if idx < len(fields):
+            field = fields[idx]
+            key = field.get("key") or field.get("name") or field.get("label") or f"field_{idx}"
+            values[key] = text
+            cl.user_session.set("pending_form_values", values)
+            idx += 1
+            cl.user_session.set("pending_form_idx", idx)
+            if idx < len(fields):
+                next_field = fields[idx]
+                label = next_field.get("label") or next_field.get("key") or next_field.get("name") or "field"
+                placeholder = next_field.get("placeholder") or ""
+                prompt = f"{label}"
+                if placeholder:
+                    prompt += f" ({placeholder})"
+                await cl.AskUserMessage(content=prompt).send()
+                return
+            cl.user_session.set("pending_form", None)
+            cl.user_session.set("pending_form_fields", None)
+            cl.user_session.set("pending_form_idx", None)
+            try:
+                output = ctrl.handle_command("submit_form " + json.dumps(values))
+            except Exception as exc:
+                output = f"Error: {exc}"
+            await cl.Message(content=output or "Form submitted.").send()
+            return
     # Risky command approval
     if any(k in text.lower() for k in ("delete", "drop", "format", "wipe", "destroy")):
         res = await cl.AskActionMessage(
