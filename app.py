@@ -610,9 +610,11 @@ class AgentApp:
         console_tab = ttk.Frame(self.left_notebook)
         a2a_tab = ttk.Frame(self.left_notebook)
         terminal_tab = ttk.Frame(self.left_notebook)
+        canvas_tab = ttk.Frame(self.left_notebook)
         self.left_notebook.add(console_tab, text="Console")
         self.left_notebook.add(a2a_tab, text="A2A Control")
         self.left_notebook.add(terminal_tab, text="Terminal")
+        self.left_notebook.add(canvas_tab, text="Canvas")
 
         self.log = tk.Text(console_tab, wrap=tk.WORD)
         self.log.pack(fill=tk.BOTH, expand=True)
@@ -621,6 +623,7 @@ class AgentApp:
 
         self._build_a2a_tab(a2a_tab)
         self._build_terminal_tab(terminal_tab)
+        self._build_canvas_tab(canvas_tab)
 
         ttk.Label(right, text="Plan (Intent → Plan → Proof)").pack(anchor="w")
         self.plan_text = tk.Text(right, height=10, wrap=tk.WORD)
@@ -801,6 +804,40 @@ class AgentApp:
         hint.pack(anchor=tk.W, padx=4, pady=2)
 
         self.root.after(200, self._terminal_pump)
+
+    def _build_canvas_tab(self, parent) -> None:
+        self.canvas_text = tk.Text(parent, wrap=tk.WORD, height=18)
+        self.canvas_text.pack(fill=tk.BOTH, expand=True, padx=2, pady=4)
+        btn_row = ttk.Frame(parent)
+        btn_row.pack(fill=tk.X, pady=4)
+        ttk.Button(btn_row, text="Load", command=self._canvas_load).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_row, text="Save", command=self._canvas_save).pack(side=tk.LEFT, padx=4)
+
+    def _canvas_path(self) -> str:
+        run_id = self.current_run.run_id if getattr(self, "current_run", None) else "default"
+        base = os.path.join(self.settings.data_dir, "runs", run_id)
+        os.makedirs(base, exist_ok=True)
+        return os.path.join(base, "canvas.md")
+
+    def _canvas_load(self) -> None:
+        path = self._canvas_path()
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except Exception:
+            text = ""
+        self.canvas_text.delete("1.0", tk.END)
+        self.canvas_text.insert(tk.END, text)
+
+    def _canvas_save(self) -> None:
+        path = self._canvas_path()
+        text = self.canvas_text.get("1.0", tk.END)
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            self.log_line(f"Canvas saved: {path}")
+        except Exception as exc:
+            self.log_line(f"Canvas save failed: {exc}")
         self._terminal_maybe_autorun()
 
     def _terminal_clear(self) -> None:

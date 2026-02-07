@@ -10,11 +10,13 @@ import chainlit as cl
 from config import get_settings
 from engine import AgentEngine
 from a2a import A2ABus
+from controller import HeadlessController
 
 
 settings = get_settings()
 engine = AgentEngine(settings)
 engine.start_a2a()
+ctrl = HeadlessController()
 
 
 async def _a2a_stream() -> None:
@@ -49,6 +51,23 @@ async def _event_stream() -> None:
                 last_ts = ts
                 etype = ev.get("type") or ev.get("event_type")
                 payload = ev.get("payload")
+                if etype == "ui_block" and isinstance(payload, dict):
+                    ui_block = payload.get("ui") or {}
+                    kind = ui_block.get("type")
+                    if kind == "image":
+                        src = ui_block.get("src") or ui_block.get("path") or ""
+                        if src:
+                            await cl.Message(
+                                content=ui_block.get("caption", "Image"),
+                                elements=[cl.Image(path=src, name="image")],
+                            ).send()
+                            continue
+                    if kind == "toast":
+                        await cl.Message(content=ui_block.get("message", "")).send()
+                        continue
+                    if kind == "form":
+                        await cl.Message(content=f"Form requested: {ui_block.get('title','Form')}").send()
+                        continue
                 await cl.Step(name="Event", type="tool").send(
                     output=json.dumps({"type": etype, "payload": payload}, indent=2)
                 )
@@ -81,42 +100,8 @@ async def on_message(message: cl.Message) -> None:
             await cl.Message(content="Denied.").send()
             return
 
-    # Route through existing engine/UI logic
-    run = None
     try:
-        run = engine.task_queue.enqueue(lambda: engine)
-    except Exception:
-        pass
-
-    # Use existing AgenticConsole logic via engine memory
-    reply = engine.a2a
-    try:
-        output = engine.a2a
-        # Use app-like agent chat via dynamic import to avoid heavy UI coupling
-        from app import AgentApp
-        app = AgentApp.__new__(AgentApp)
-        app.settings = settings
-        app.engine = engine
-        app.memory = engine.memory
-        app.node_name = settings.node_name
-        app.metrics = engine.metrics
-        app.task_queue = engine.task_queue
-        app.rag = engine.rag
-        app.graph = engine.graph
-        app.research = engine.research
-        app.jobs = engine.jobs
-        app.a2a = engine.a2a
-        app.a2a_net = engine.a2a_net
-        app._a2a_pause_path = os.path.join(settings.data_dir, "a2a_bridge_pause.json")
-        app._a2a_async_enabled = False
-        app.log_line = lambda _m: None
-        app._memory_context = lambda: (None, None)
-        app._add_message = lambda *_a, **_k: None
-        app._log_event = lambda *_a, **_k: None
-        app._agent_chat = AgentApp._agent_chat.__get__(app)
-        app._agent_chat_base = AgentApp._agent_chat_base.__get__(app)
-        output = app._agent_chat(text)
+        output = ctrl.handle_command(text)
     except Exception as exc:
         output = f"Error: {exc}"
-
-    await cl.Message(content=output).send()
+    await cl.Message(content=output or "OK").send()
